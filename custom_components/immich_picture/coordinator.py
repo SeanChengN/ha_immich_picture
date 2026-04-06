@@ -182,18 +182,17 @@ class ImmichDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
         return data.get("assets", []) if isinstance(data, dict) else []
 
     async def _fetch_favorites(self, session) -> list[dict[str, Any]]:
-        url = f"{self.host}/api/assets"
-        params: dict[str, Any] = {
-            "page": 1,
+        url = f"{self.host}/api/search/metadata"
+        body: dict[str, Any] = {
             "size": self.asset_count,
-            "isFavorite": "true",
+            "isFavorite": True,
         }
-        async with session.get(url, headers=self._headers, params=params) as resp:
+        async with session.post(url, headers=self._headers, json=body) as resp:
             resp.raise_for_status()
             data = await resp.json()
-        if isinstance(data, list):
-            return data
-        return data.get("assets", {}).get("items", []) if isinstance(data, dict) else []
+        return (
+            data.get("assets", {}).get("items", []) if isinstance(data, dict) else []
+        )
 
     async def _fetch_search(self, session) -> list[dict[str, Any]]:
         url = f"{self.host}/api/search/metadata"
