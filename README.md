@@ -12,6 +12,7 @@ A Home Assistant custom integration that turns your [Immich](https://immich.app)
 - **Configurable refresh** – set how often a fresh batch of assets is fetched from Immich (1 min – 24 h)
 - **Resilient image cache** – every downloaded thumbnail is written to disk; if Immich is unreachable the last cached version of each photo is served instead
 - **Multiple instances** – add the integration more than once to run several slideshows (e.g. one per album or one per room) simultaneously
+- **Portrait photo support** – portrait images are automatically paired side-by-side to produce a landscape composite, so no photos are wasted
 - **Live reconfiguration** – all timing, count, and JSON filter settings are editable via the ⚙ configure button without removing and re-adding the integration
 
 ---
@@ -178,3 +179,15 @@ Each device also includes a **diagnostic sensor** (`sensor.immich_picture_image_
 **"Unable to connect" during setup** — verify the URL includes the port (e.g. `http://192.168.1.100:2283`) and that the API key is correct.
 
 **JSON filter rejected** — the field must be a valid JSON *object* (curly-brace wrapper, not an array). Use a tool like [jsonlint.com](https://jsonlint.com) to validate before pasting.
+
+---
+
+## Changelog
+
+### 1.3.0
+
+- **Portrait image support** — portrait (and square) images are no longer filtered out. Instead, they are automatically paired and composited side-by-side into a single landscape image using PIL. If there is an odd number of portrait images, the unpaired one is excluded. Landscape images continue to be served as-is.
+
+### 1.2.1
+
+- Initial tracked release
