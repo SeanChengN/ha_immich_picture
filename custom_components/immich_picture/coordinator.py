@@ -154,22 +154,16 @@ class ImmichDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
         return data if isinstance(data, list) else []
 
     async def _fetch_all(self, session) -> list[dict[str, Any]]:
-        url = f"{self.host}/api/assets"
-        params: dict[str, Any] = {
-            "page": 1,
-            "size": self.asset_count,
-        }
-        # Merge any extra user-supplied query params (type, isFavorite, etc.)
-        for key, val in self.api_params.items():
-            if val not in (None, ""):
-                params[key] = val
-        async with session.get(url, headers=self._headers, params=params) as resp:
+        url = f"{self.host}/api/search/metadata"
+        body: dict[str, Any] = {"size": self.asset_count}
+        # Merge any extra user-supplied params (type, isFavorite, etc.)
+        body.update({k: v for k, v in self.api_params.items() if v not in (None, "")})
+        async with session.post(url, headers=self._headers, json=body) as resp:
             resp.raise_for_status()
             data = await resp.json()
-        # The Immich API can return a bare list or a paginated envelope
-        if isinstance(data, list):
-            return data
-        return data.get("assets", {}).get("items", []) if isinstance(data, dict) else []
+        return (
+            data.get("assets", {}).get("items", []) if isinstance(data, dict) else []
+        )
 
     async def _fetch_album(self, session) -> list[dict[str, Any]]:
         if not self.album_id:
@@ -182,18 +176,17 @@ class ImmichDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
         return data.get("assets", []) if isinstance(data, dict) else []
 
     async def _fetch_favorites(self, session) -> list[dict[str, Any]]:
-        url = f"{self.host}/api/assets"
-        params: dict[str, Any] = {
-            "page": 1,
+        url = f"{self.host}/api/search/metadata"
+        body: dict[str, Any] = {
             "size": self.asset_count,
-            "isFavorite": "true",
+            "isFavorite": True,
         }
-        async with session.get(url, headers=self._headers, params=params) as resp:
+        async with session.post(url, headers=self._headers, json=body) as resp:
             resp.raise_for_status()
             data = await resp.json()
-        if isinstance(data, list):
-            return data
-        return data.get("assets", {}).get("items", []) if isinstance(data, dict) else []
+        return (
+            data.get("assets", {}).get("items", []) if isinstance(data, dict) else []
+        )
 
     async def _fetch_search(self, session) -> list[dict[str, Any]]:
         url = f"{self.host}/api/search/metadata"
