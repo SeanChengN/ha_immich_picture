@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import pathlib
 from datetime import timedelta
 from typing import Any
+
+from PIL import Image
 
 from homeassistant.components.camera import Camera
 from homeassistant.config_entries import ConfigEntry
@@ -205,6 +208,54 @@ class ImmichCamera(Camera):
 
         await self.hass.async_add_executor_job(_delete_excess)
 
+    async def _fetch_single_thumbnail(self, asset_id: str) -> bytes | None:
+        """Fetch a single thumbnail from Immich, returning raw bytes or None."""
+        url = (
+            f"{self._coordinator.host}/api/assets/{asset_id}/thumbnail"
+            "?size=preview&edited=true"
+        )
+        session = async_get_clientsession(self.hass)
+        async with session.get(
+            url,
+            headers={"x-api-key": self._coordinator.api_key},
+            timeout=15,
+        ) as resp:
+            if resp.status == 200:
+                return await resp.read()
+            _LOGGER.warning(
+                "Immich returned HTTP %s for asset thumbnail %s",
+                resp.status,
+                asset_id,
+            )
+            return None
+
+    @staticmethod
+    def _compose_side_by_side(left_bytes: bytes, right_bytes: bytes) -> bytes:
+        """Stitch two portrait images side-by-side into a single landscape image."""
+        left_img = Image.open(io.BytesIO(left_bytes))
+        right_img = Image.open(io.BytesIO(right_bytes))
+
+        # Scale both images to the same height (use the smaller height)
+        target_h = min(left_img.height, right_img.height)
+        if left_img.height != target_h:
+            scale = target_h / left_img.height
+            left_img = left_img.resize(
+                (int(left_img.width * scale), target_h), Image.LANCZOS
+            )
+        if right_img.height != target_h:
+            scale = target_h / right_img.height
+            right_img = right_img.resize(
+                (int(right_img.width * scale), target_h), Image.LANCZOS
+            )
+
+        combined = Image.new("RGB", (left_img.width + right_img.width, target_h))
+        combined.paste(left_img, (0, 0))
+        combined.paste(right_img, (left_img.width, 0))
+
+        buf = io.BytesIO()
+        combined.save(buf, format="JPEG", quality=85)
+        return buf.getvalue()
+
     async def _load_current_image(self) -> None:
         """Fetch image bytes for the current asset from Immich.
 
@@ -227,19 +278,18 @@ class ImmichCamera(Camera):
             self._cache_dir / f"{idx}.jpg" if self._cache_dir is not None else None
         )
 
-        url = (
-            f"{self._coordinator.host}/api/assets/{asset_id}/thumbnail"
-            "?size=preview&edited=true"
-        )
-        session = async_get_clientsession(self.hass)
         try:
-            async with session.get(
-                url,
-                headers={"x-api-key": self._coordinator.api_key},
-                timeout=15,
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.read()
+            if asset.get("is_portrait_pair"):
+                # Fetch both portrait images and composite them
+                left_id = asset["left"]["id"]
+                right_id = asset["right"]["id"]
+                left_bytes = await self._fetch_single_thumbnail(left_id)
+                right_bytes = await self._fetch_single_thumbnail(right_id)
+
+                if left_bytes and right_bytes:
+                    data = await self.hass.async_add_executor_job(
+                        self._compose_side_by_side, left_bytes, right_bytes
+                    )
                     self._current_image_bytes = data
                     if cache_file is not None:
                         await self.hass.async_add_executor_job(
@@ -247,10 +297,20 @@ class ImmichCamera(Camera):
                         )
                 else:
                     _LOGGER.warning(
-                        "Immich returned HTTP %s for asset thumbnail %s",
-                        resp.status,
+                        "Could not fetch both portrait thumbnails for pair %s",
                         asset_id,
                     )
+                    await self._serve_from_cache(cache_file)
+            else:
+                # Single landscape image
+                data = await self._fetch_single_thumbnail(asset_id)
+                if data:
+                    self._current_image_bytes = data
+                    if cache_file is not None:
+                        await self.hass.async_add_executor_job(
+                            cache_file.write_bytes, data
+                        )
+                else:
                     await self._serve_from_cache(cache_file)
         except Exception as err:
             _LOGGER.debug("Error fetching Immich thumbnail for %s: %s", asset_id, err)
