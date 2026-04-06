@@ -83,18 +83,46 @@ class ImmichDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
         # (Videos cannot be served as still images.)
         image_assets = [a for a in assets if a.get("type") == ASSET_TYPE_IMAGE]
 
-        # Keep only landscape (wide) images; skip portraits and squares.
-        landscape_assets = [
-            a for a in image_assets
-            if a.get("width") and a.get("height") and a["width"] > a["height"]
-        ]
+        # Separate landscape and portrait images.
+        landscape_assets = []
+        portrait_assets = []
+        for a in image_assets:
+            w = a.get("width")
+            h = a.get("height")
+            if not w or not h:
+                continue
+            if w > h:
+                landscape_assets.append(a)
+            else:
+                portrait_assets.append(a)
 
-        if not landscape_assets:
+        # Pair up portrait images side-by-side to form landscape composites.
+        portrait_pairs: list[dict[str, Any]] = []
+        for i in range(0, len(portrait_assets) - 1, 2):
+            left = portrait_assets[i]
+            right = portrait_assets[i + 1]
+            portrait_pairs.append({
+                "is_portrait_pair": True,
+                "left": left,
+                "right": right,
+                "id": f"{left['id']}_{right['id']}",
+                "originalFileName": (
+                    f"{left.get('originalFileName', '')} + "
+                    f"{right.get('originalFileName', '')}"
+                ),
+                "localDateTime": left.get("localDateTime"),
+                "fileCreatedAt": left.get("fileCreatedAt"),
+            })
+
+        combined = landscape_assets + portrait_pairs
+
+        if not combined:
             _LOGGER.warning(
-                "Immich returned no landscape image assets for endpoint '%s'", self.endpoint
+                "Immich returned no usable image assets for endpoint '%s'",
+                self.endpoint,
             )
 
-        return landscape_assets
+        return combined
 
     async def _fetch_assets(self, session) -> list[dict[str, Any]]:
         """Route to the correct API call based on the configured endpoint."""
