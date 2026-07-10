@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Immich Picture Player</title>
+    <style>
+      html, body { width: 100%; height: 100%; margin: 0; background: #000; }
+      #player { width: 100%; height: 100%; position: relative; overflow: hidden; }
+      video, img { width: 100%; height: 100%; object-fit: contain; background: #000; }
+      [hidden], #message[hidden] { display: none; }
+      #message { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-family: sans-serif; text-align: center; padding: 1rem; background: rgba(0, 0, 0, 0.55); pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <main id="player">
+      <img id="image" alt="Immich media" hidden>
+      <video id="video" muted autoplay loop playsinline controls hidden></video>
+      <div id="message">Loading Immich media…</div>
+    </main>
+    <script>
+      const image = document.getElementById("image");
+      const video = document.getElementById("video");
+      const message = document.getElementById("message");
+      const stateUrl = `${window.location.pathname}/state${window.location.search}`;
+      let currentRevision = null;
+      let snapshotUrl = null;
+
+      function showMessage(text) {
+        message.textContent = text;
+        message.hidden = false;
+      }
+
+      function showImage(url) {
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+        video.hidden = true;
+        image.src = url;
+        image.hidden = false;
+        message.hidden = true;
+      }
+
+      function showVideo(url, posterUrl) {
+        image.hidden = true;
+        video.poster = posterUrl;
+        video.muted = true;
+        video.src = url;
+        video.hidden = false;
+        video.load();
+        video.play().then(() => { message.hidden = true; }).catch(() => {
+          showMessage("Tap the video controls to start playback.");
+        });
+      }
+
+      video.addEventListener("error", () => {
+        if (snapshotUrl) {
+          image.src = snapshotUrl;
+          image.hidden = false;
+        }
+        showMessage("This video could not be played. The preview is shown instead.");
+      });
+
+      async function refresh() {
+        try {
+          const response = await fetch(stateUrl, {
+            cache: "no-store",
+            credentials: "same-origin",
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const state = await response.json();
+          if (!state.revision) {
+            showMessage("No media is available yet.");
+            return;
+          }
+          if (state.revision === currentRevision) return;
+
+          currentRevision = state.revision;
+          snapshotUrl = state.snapshot_url;
+          if (state.asset_type === "VIDEO" && state.video_url) {
+            showVideo(state.video_url, snapshotUrl);
+          } else {
+            showImage(snapshotUrl);
+          }
+        } catch (err) {
+          showMessage("Waiting for Home Assistant media state…");
+        } finally {
+          window.setTimeout(refresh, 1000);
+        }
+      }
+
+      refresh();
+    </script>
+  </body>
+</html>

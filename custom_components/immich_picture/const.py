@@ -1,6 +1,7 @@
 """Constants for the Immich integration."""
 
 DOMAIN = "immich_picture"
+DATA_CAMERAS = "cameras"
 
 # Config entry keys
 CONF_API_KEY = "api_key"

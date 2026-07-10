@@ -8,12 +8,27 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from .const import DOMAIN
+from .const import DATA_CAMERAS, DOMAIN
 from .coordinator import ImmichDataUpdateCoordinator
+from .player import (
+    ImmichPlayerPageView,
+    ImmichPlayerStateView,
+    ImmichVideoPlaybackView,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["camera", "sensor"]
+
+
+async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
+    """Set up shared HTTP views for the Immich player."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    domain_data.setdefault(DATA_CAMERAS, {})
+    hass.http.register_view(ImmichPlayerPageView(hass))
+    hass.http.register_view(ImmichPlayerStateView(hass))
+    hass.http.register_view(ImmichVideoPlaybackView(hass))
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -28,7 +43,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             err,
         )
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    domain_data.setdefault(DATA_CAMERAS, {})
+    domain_data[entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

@@ -68,9 +68,9 @@
       },
       "intervals": {
         "title": "Timing",
-        "description": "Set how often the displayed photo rotates and how often new photos are fetched from Immich Picture.",
+        "description": "Set how often the displayed media rotates and how often new media are fetched from Immich Picture.",
         "data": {
-          "rotation_interval": "Photo rotation interval (seconds)",
+          "rotation_interval": "Media rotation interval (seconds)",
           "scan_interval": "API refresh interval (seconds)"
         }
       }
@@ -90,7 +90,7 @@
       "init": {
         "title": "Immich Picture Options",
         "data": {
-          "rotation_interval": "Photo rotation interval (seconds)",
+          "rotation_interval": "Media rotation interval (seconds)",
           "scan_interval": "API refresh interval (seconds)",
           "asset_count": "Number of assets to load",
           "api_params": "Filter (JSON)"

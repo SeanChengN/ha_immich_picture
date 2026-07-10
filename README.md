@@ -1,18 +1,19 @@
 # Immich Picture – Home Assistant Integration
 
-A Home Assistant custom integration that turns your [Immich](https://immich.app) photo server into a rotating picture slideshow, exposed as a `camera` entity. Drop it onto any dashboard with a **Picture card** or **Picture Glance card** and your photos cycle automatically.
+A Home Assistant custom integration that turns your [Immich](https://immich.app) photo server into a rotating media slideshow, exposed as a `camera` entity. Drop it onto any dashboard with a **Picture card** or **Picture Glance card** and your photos and video previews cycle automatically.
 
 ---
 
 ## Features
 
-- **Five photo sources** – random, all recent, by album, favourites only, or metadata search
+- **Five media sources** – random, all recent, by album, favourites only, or metadata search
 - **Filterable random & search** – POST a JSON body to the Immich API to narrow results by person, city, date range, type, and more
-- **Configurable rotation** – set how often the displayed photo changes (5 s – 1 h)
+- **Configurable rotation** – set how often the displayed media changes (5 s – 1 h)
 - **Configurable refresh** – set how often a fresh batch of assets is fetched from Immich (1 min – 24 h)
 - **Resilient image cache** – every downloaded thumbnail is written to disk; if Immich is unreachable the last cached version of each photo is served instead
 - **Multiple instances** – add the integration more than once to run several slideshows (e.g. one per album or one per room) simultaneously
 - **Portrait photo support** – portrait images are automatically paired side-by-side to produce a landscape composite, so no photos are wasted
+- **Video playback** – videos are included as JPEG previews in the camera entity and can play in a built-in, looping HTML5 player
 - **Live reconfiguration** – all timing, count, and JSON filter settings are editable via the ⚙ configure button without removing and re-adding the integration
 
 ---
@@ -25,7 +26,7 @@ A Home Assistant custom integration that turns your [Immich](https://immich.app)
 
 ### Immich Permissions
 
-The following permissions are needed for all the five photo sources to work:
+The following permissions are needed for all five media sources to work:
 
 - `asset.read` - required for the random, recent, favourite and metadata search
 - `album.read` - required for the album request
@@ -60,11 +61,11 @@ The following permissions are needed for all the five photo sources to work:
 
 ---
 
-## Photo Sources
+## Media Sources
 
 ### Random Assets
 
-Fetches a random selection of photos each refresh cycle using `POST /api/search/random`.
+Fetches a random selection of images and video previews each refresh cycle using `POST /api/search/random`.
 
 Supports an optional JSON filter body to narrow the random pool:
 
@@ -72,7 +73,7 @@ Supports an optional JSON filter body to narrow the random pool:
 {
   "personIds": ["uuid-of-person-1", "uuid-of-person-2"],
   "country": "Japan",
-  "type": "IMAGE"
+  "type": "VIDEO"
 }
 ```
 
@@ -88,25 +89,25 @@ Fetches the most recent assets from your library, ordered newest-first or oldest
 
 ### Album Assets
 
-Fetches all photos from a specific album. Albums are loaded from Immich during setup so you can pick from a dropdown.
+Fetches all images and video previews from a specific album. Albums are loaded from Immich during setup so you can pick from a dropdown.
 
 ---
 
 ### Favourite Assets
 
-Fetches only photos you have marked as a favourite in Immich.
+Fetches only images and video previews you have marked as a favourite in Immich.
 
 ---
 
 ### Search by Metadata
 
-Fetches photos matching a JSON metadata query using `POST /api/search/metadata`. This is the most powerful source — you can filter by city, country, date range, camera make/model, whether the photo is archived, a favourite, a specific person, and more.
+Fetches images and video previews matching a JSON metadata query using `POST /api/search/metadata`. This is the most powerful source – you can filter by city, country, date range, camera make/model, whether the media is archived, a favourite, a specific person, and more.
 
 ```json
 {
   "city": "Paris",
   "isFavorite": true,
-  "type": "IMAGE",
+  "type": "VIDEO",
   "takenAfter": "2023-01-01T00:00:00Z"
 }
 ```
@@ -132,7 +133,7 @@ Changes take effect immediately — the integration reloads automatically when y
 
 ## Image Cache
 
-Every thumbnail that is successfully downloaded is written to a slot file named after its position in the slideshow:
+Every image or video thumbnail that is successfully downloaded is written to a slot file named after its position in the slideshow:
 
 ```
 <ha-config-dir>/immich_picture/image_cache/<entry-id>/0.jpg
@@ -143,7 +144,7 @@ Every thumbnail that is successfully downloaded is written to a slot file named 
 
 The number of files is capped at the configured **Number of assets** value. Each slot file is overwritten in-place as the slideshow cycles through positions, so the cache is self-maintaining with no unbounded growth.
 
-**When Immich is available** the slot file is overwritten with the freshest image for that position.
+**When Immich is available** the slot file is overwritten with the freshest image or video preview for that position. Video slides are static JPEG previews generated by Immich; the camera entity does not play video.
 
 **When Immich is unreachable** (planned downtime, network outage, server restart) the integration serves the last cached file for that slot instead of showing a blank or broken image. If a slot has never been fetched before and has no cache file yet, the previously displayed image is preserved unchanged.
 
@@ -160,13 +161,31 @@ The entity also exposes state attributes you can use in automations or template 
 | Attribute | Description |
 |---|---|
 | `asset_id` | Immich UUID of the current photo |
+| `asset_type` | Current asset type (`IMAGE` or `VIDEO`) |
 | `filename` | Original file name |
 | `taken_at` | Date/time the photo was taken |
 | `total_assets` | Number of assets in the current pool |
 | `current_index` | 1-based position in the pool |
 | `endpoint` | Configured photo source identifier |
+| `player_url` | Authenticated built-in media player page for this entry |
 
 Each device also includes a **diagnostic sensor** (`sensor.immich_picture_image_cache_path`) that shows the full path to the on-disk image cache directory for that instance. This is useful for locating cached files when debugging or for manual cache management.
+
+---
+
+## Video Playback
+
+The camera entity always returns a JPEG snapshot, including for VIDEO assets. To play videos, add a **Webpage** card and use the `player_url` attribute from the camera entity as its URL. The built-in player stays in sync with the slideshow: images display as snapshots, and videos play muted in a loop until the configured media rotation interval selects the next asset.
+
+```yaml
+type: iframe
+url: /api/immich_picture/player/<entry-id>
+aspect_ratio: "16:9"
+allow: autoplay; fullscreen
+disable_sandbox: true
+```
+
+Use the complete `player_url` value, including its `token` query parameter, rather than manually constructing this URL. The token grants access only to this player's current media pool, and the player proxies video requests to Immich without exposing the API key. Treat `player_url` as a secret and do not expose it through an unauthenticated reverse proxy. Videos start muted to satisfy browser autoplay policies; use the player controls to enable sound after interacting with the page.
 
 ---
 
@@ -183,6 +202,14 @@ Each device also includes a **diagnostic sensor** (`sensor.immich_picture_image_
 ---
 
 ## Changelog
+
+### 1.4.0
+
+- **Built-in media player** – added an authenticated HTML5 player page for mixed image/video slideshows. Videos are muted and loop until the normal rotation interval advances to the next media item.
+
+### 1.3.2
+
+- **Video thumbnail support** – VIDEO assets are now included alongside IMAGE assets and shown as Immich-generated JPEG previews in the slideshow.
 
 ### 1.3.0
 

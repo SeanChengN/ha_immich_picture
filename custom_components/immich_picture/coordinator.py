@@ -28,6 +28,7 @@ from .const import (
     ENDPOINT_RANDOM,
     ENDPOINT_SEARCH,
     ASSET_TYPE_IMAGE,
+    ASSET_TYPE_VIDEO,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -79,9 +80,10 @@ class ImmichDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
         except Exception as err:
             raise UpdateFailed(f"Error communicating with Immich API: {err}") from err
 
-        # Keep only image assets so the camera entity always has a displayable frame.
-        # (Videos cannot be served as still images.)
+        # The camera displays a JPEG thumbnail for each supported media asset.
+        # Videos use Immich's generated thumbnail and are not played directly.
         image_assets = [a for a in assets if a.get("type") == ASSET_TYPE_IMAGE]
+        video_assets = [a for a in assets if a.get("type") == ASSET_TYPE_VIDEO]
 
         # Separate landscape and portrait images.
         landscape_assets = []
@@ -103,6 +105,7 @@ class ImmichDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
             right = portrait_assets[i + 1]
             portrait_pairs.append({
                 "is_portrait_pair": True,
+                "type": ASSET_TYPE_IMAGE,
                 "left": left,
                 "right": right,
                 "id": f"{left['id']}_{right['id']}",
@@ -114,11 +117,13 @@ class ImmichDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
                 "fileCreatedAt": left.get("fileCreatedAt"),
             })
 
-        combined = landscape_assets + portrait_pairs
+        # Videos are always displayed as individual thumbnail slides, regardless
+        # of their dimensions. Only still images are eligible for compositing.
+        combined = landscape_assets + video_assets + portrait_pairs
 
         if not combined:
             _LOGGER.warning(
-                "Immich returned no usable image assets for endpoint '%s'",
+                "Immich returned no usable media assets for endpoint '%s'",
                 self.endpoint,
             )
 

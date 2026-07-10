@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import io
+import hashlib
+import hmac
 import logging
 import pathlib
 from datetime import timedelta
@@ -20,8 +22,11 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
     API_ENDPOINTS,
+    ASSET_TYPE_IMAGE,
+    ASSET_TYPE_VIDEO,
     CONF_API_ENDPOINT,
     CONF_ROTATION_INTERVAL,
+    DATA_CAMERAS,
     DEFAULT_ROTATION_INTERVAL,
     DOMAIN,
 )
@@ -58,6 +63,9 @@ class ImmichCamera(Camera):
     _attr_content_type = "image/jpeg"
     # This is a read-only, non-streaming camera
     _attr_is_streaming = False
+    _entity_component_unrecorded_attributes = (
+        Camera._entity_component_unrecorded_attributes | frozenset({"player_url"})
+    )
 
     def __init__(
         self,
@@ -105,6 +113,10 @@ class ImmichCamera(Camera):
         )
         self._cache_dir = cache_dir
 
+        self.hass.data[DOMAIN].setdefault(DATA_CAMERAS, {})[
+            self._config_entry.entry_id
+        ] = self
+
         # Restore a displayable image immediately after startup, even if the
         # initial Immich refresh failed and no asset list is available yet.
         await self._restore_startup_image_from_cache()
@@ -132,6 +144,9 @@ class ImmichCamera(Camera):
         """Clean up the rotation timer."""
         if self._rotation_unsubscribe is not None:
             self._rotation_unsubscribe()
+        cameras = self.hass.data.get(DOMAIN, {}).get(DATA_CAMERAS, {})
+        if cameras.get(self._config_entry.entry_id) is self:
+            cameras.pop(self._config_entry.entry_id)
 
     # ------------------------------------------------------------------
     # Camera interface
@@ -150,21 +165,54 @@ class ImmichCamera(Camera):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Expose metadata about the current photo."""
-        assets = self._coordinator.data
-        if not assets:
+        asset = self.current_asset
+        if asset is None:
             return {}
 
+        assets = self._coordinator.data or []
         idx = min(self._current_index, len(assets) - 1)
-        asset = assets[idx]
 
         return {
             "asset_id": asset.get("id"),
+            "asset_type": asset.get("type", ASSET_TYPE_IMAGE),
             "filename": asset.get("originalFileName"),
             "taken_at": asset.get("localDateTime") or asset.get("fileCreatedAt"),
             "total_assets": len(assets),
             "current_index": idx + 1,
             "endpoint": self._config_entry.data.get(CONF_API_ENDPOINT),
+            "player_url": (
+                f"/api/{DOMAIN}/player/{self._config_entry.entry_id}"
+                f"?token={self.player_token}"
+            ),
         }
+
+    @property
+    def current_asset(self) -> dict[str, Any] | None:
+        """Return the media asset currently selected for the slideshow."""
+        assets = self._coordinator.data or []
+        if not assets:
+            return None
+        return assets[min(self._current_index, len(assets) - 1)]
+
+    def has_video_asset(self, asset_id: str) -> bool:
+        """Return whether an asset is a video in the current media pool."""
+        return any(
+            asset.get("id") == asset_id and asset.get("type") == ASSET_TYPE_VIDEO
+            for asset in self._coordinator.data or []
+        )
+
+    @property
+    def player_token(self) -> str:
+        """Return a stable opaque token for the embedded player URL."""
+        return hmac.new(
+            self._coordinator.api_key.encode(),
+            self._config_entry.entry_id.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def is_valid_player_token(self, token: str | None) -> bool:
+        """Validate an embedded player token without exposing the API key."""
+        return bool(token) and hmac.compare_digest(token, self.player_token)
 
     # ------------------------------------------------------------------
     # Internal helpers
