@@ -17,6 +17,7 @@ CONF_SCAN_INTERVAL = "scan_interval"
 DEFAULT_SCAN_INTERVAL = 300  # seconds (5 minutes)
 DEFAULT_ROTATION_INTERVAL = 30  # seconds
 DEFAULT_ASSET_COUNT = 50
+MAX_VIDEO_CACHE_BYTES = 50 * 1024 * 1024
 
 # Endpoint identifiers
 ENDPOINT_RANDOM = "random_assets"

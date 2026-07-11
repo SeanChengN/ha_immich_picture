@@ -116,6 +116,9 @@ class ImmichVideoPlaybackView(_ImmichPlayerView):
         if not camera.has_video_asset(asset_id):
             raise web.HTTPNotFound
 
+        if cache_file := camera.cached_video_path(asset_id):
+            return web.FileResponse(cache_file)
+
         upstream_headers = {"x-api-key": camera._coordinator.api_key}
         for header in (hdrs.RANGE, hdrs.IF_RANGE):
             if value := request.headers.get(header):

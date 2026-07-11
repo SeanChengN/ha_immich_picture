@@ -20,6 +20,13 @@
           "api_key": "Your Immich API key (kept secret)"
         }
       },
+      "account": {
+        "title": "Choose Immich Account",
+        "description": "Reuse an existing Immich connection for another media source, or connect a new account.",
+        "data": {
+          "account": "Immich account"
+        }
+      },
       "endpoint": {
         "title": "Choose API Endpoint",
         "description": "Select which Immich API endpoint the slideshow will use to retrieve photos.",

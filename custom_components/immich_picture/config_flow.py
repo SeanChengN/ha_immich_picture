@@ -44,6 +44,7 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+NEW_ACCOUNT = "__new_account__"
 
 
 def _number_selector(min_val: int, max_val: int, step: int = 1) -> NumberSelector:
@@ -69,6 +70,7 @@ class ImmichConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._endpoint: str = ""
         self._albums: list[dict[str, Any]] = []
         self._collected: dict[str, Any] = {}
+        self._use_new_account = False
 
     # ------------------------------------------------------------------
     # Step 1 – host + API key
@@ -78,6 +80,9 @@ class ImmichConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
         """Ask for the Immich host and API key then validate connectivity."""
+        if not self._use_new_account and self._saved_account_entries():
+            return await self.async_step_account()
+
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -115,6 +120,59 @@ class ImmichConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     ): TextSelector(
                         TextSelectorConfig(type=TextSelectorType.PASSWORD)
                     ),
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_account(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Choose a saved Immich account or enter a new one."""
+        accounts = self._saved_account_entries()
+        if not accounts:
+            self._use_new_account = True
+            return await self.async_step_user()
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            selected = user_input["account"]
+            if selected == NEW_ACCOUNT:
+                self._use_new_account = True
+                return await self.async_step_user()
+
+            entry = next((entry for entry in accounts if entry.entry_id == selected), None)
+            if entry is None:
+                errors["account"] = "cannot_connect"
+            else:
+                host = entry.data.get(CONF_HOST, "").rstrip("/")
+                api_key = entry.data.get(CONF_API_KEY, "")
+                error = await self._test_credentials(host, api_key)
+                if error:
+                    errors["account"] = error
+                else:
+                    self._host = host
+                    self._api_key = api_key
+                    return await self.async_step_endpoint()
+
+        options = [
+            SelectOptionDict(
+                value=entry.entry_id,
+                label=f"{entry.data.get(CONF_HOST, 'Immich')} ({entry.title})",
+            )
+            for entry in accounts
+        ]
+        options.append(
+            SelectOptionDict(value=NEW_ACCOUNT, label="Connect a new Immich account")
+        )
+
+        return self.async_show_form(
+            step_id="account",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("account"): SelectSelector(
+                        SelectSelectorConfig(options=options)
+                    )
                 }
             ),
             errors=errors,
@@ -401,6 +459,14 @@ class ImmichConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _saved_account_entries(self) -> list[config_entries.ConfigEntry]:
+        """Return entries that can supply saved Immich credentials."""
+        return [
+            entry
+            for entry in self.hass.config_entries.async_entries(DOMAIN)
+            if entry.data.get(CONF_HOST) and entry.data.get(CONF_API_KEY)
+        ]
 
     async def _test_credentials(self, host: str, api_key: str) -> str | None:
         """Return an error key string, or None on success."""

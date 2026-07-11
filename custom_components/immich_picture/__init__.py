@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import pathlib
+import shutil
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -61,6 +63,19 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove all on-disk media cache for a deleted config entry."""
+    cache_root = pathlib.Path(hass.config.path(DOMAIN, "image_cache"))
+    cache_dir = cache_root / entry.entry_id
+
+    def _remove_cache() -> None:
+        if cache_dir.parent.resolve() != cache_root.resolve():
+            raise ValueError("Refusing to remove a cache directory outside its root")
+        shutil.rmtree(cache_dir, ignore_errors=True)
+
+    await hass.async_add_executor_job(_remove_cache)
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:

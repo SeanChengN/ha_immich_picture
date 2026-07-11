@@ -10,6 +10,7 @@ import pathlib
 from datetime import timedelta
 from typing import Any
 
+from aiohttp import ClientTimeout
 from PIL import Image
 
 from homeassistant.components.camera import Camera
@@ -29,6 +30,7 @@ from .const import (
     DATA_CAMERAS,
     DEFAULT_ROTATION_INTERVAL,
     DOMAIN,
+    MAX_VIDEO_CACHE_BYTES,
 )
 from .coordinator import ImmichDataUpdateCoordinator
 
@@ -81,6 +83,7 @@ class ImmichCamera(Camera):
         self._current_image_bytes: bytes | None = None
         self._rotation_unsubscribe = None
         self._cache_dir: pathlib.Path | None = None
+        self._video_cache_in_progress: set[str] = set()
 
         endpoint_label = API_ENDPOINTS.get(
             config_entry.data.get(CONF_API_ENDPOINT, ""), "Immich Picture"
@@ -229,8 +232,8 @@ class ImmichCamera(Camera):
         self.hass.async_create_task(self._load_current_image())
 
         # Prune any slot files beyond the new asset count
-        if self._cache_dir is not None and assets:
-            self.hass.async_create_task(self._prune_cache(len(assets)))
+        if self._cache_dir is not None:
+            self.hass.async_create_task(self._prune_cache(len(assets), assets))
 
         self.async_write_ha_state()
 
@@ -244,14 +247,35 @@ class ImmichCamera(Camera):
         await self._load_current_image()
         self.async_write_ha_state()
 
-    async def _prune_cache(self, keep: int) -> None:
-        """Delete slot files whose index is >= the current asset count."""
+    async def _prune_cache(self, keep: int, assets: list[dict[str, Any]]) -> None:
+        """Prune obsolete image slots and video files outside the asset pool."""
+        video_ids = {
+            str(asset["id"])
+            for asset in assets
+            if asset.get("type") == ASSET_TYPE_VIDEO and asset.get("id")
+        }
+
         def _delete_excess() -> None:
             for f in self._cache_dir.glob("*.jpg"):
                 try:
                     if int(f.stem) >= keep:
                         f.unlink()
                 except (ValueError, OSError):
+                    pass
+
+            for f in self._cache_dir.glob("*.mp4"):
+                try:
+                    if f.stem not in video_ids:
+                        f.unlink()
+                except OSError:
+                    pass
+
+            for f in self._cache_dir.glob("*.mp4.part"):
+                try:
+                    asset_id = f.name.removesuffix(".mp4.part")
+                    if asset_id not in video_ids:
+                        f.unlink()
+                except OSError:
                     pass
 
         await self.hass.async_add_executor_job(_delete_excess)
@@ -276,6 +300,70 @@ class ImmichCamera(Camera):
                 asset_id,
             )
             return None
+
+    def cached_video_path(self, asset_id: str) -> pathlib.Path | None:
+        """Return a completed local video cache file, if one exists."""
+        if self._cache_dir is None:
+            return None
+        cache_file = self._cache_dir / f"{asset_id}.mp4"
+        return cache_file if cache_file.is_file() else None
+
+    def _schedule_video_cache(self, asset_id: str) -> None:
+        """Start caching the current short video without blocking rotation."""
+        if asset_id in self._video_cache_in_progress:
+            return
+        if self.cached_video_path(asset_id) is not None:
+            return
+        self._video_cache_in_progress.add(asset_id)
+        self.hass.async_create_task(self._async_cache_video(asset_id))
+
+    async def _async_cache_video(self, asset_id: str) -> None:
+        """Cache a video only when Immich reports it is below the size limit."""
+        if self._cache_dir is None:
+            self._video_cache_in_progress.discard(asset_id)
+            return
+
+        cache_file = self._cache_dir / f"{asset_id}.mp4"
+        temp_file = self._cache_dir / f"{asset_id}.mp4.part"
+        session = async_get_clientsession(self.hass)
+        url = f"{self._coordinator.host}/api/assets/{asset_id}/video/playback"
+        headers = {"x-api-key": self._coordinator.api_key, "Range": "bytes=0-0"}
+
+        try:
+            async with session.get(url, headers=headers, timeout=15) as resp:
+                content_range = resp.headers.get("Content-Range", "")
+                total_text = content_range.rsplit("/", 1)[-1]
+                if resp.status != 206 or not total_text.isdecimal():
+                    return
+                if int(total_text) >= MAX_VIDEO_CACHE_BYTES:
+                    return
+
+            async with session.get(
+                url,
+                headers={"x-api-key": self._coordinator.api_key},
+                timeout=ClientTimeout(total=None, sock_connect=15),
+            ) as resp:
+                if resp.status != 200:
+                    return
+                data = await resp.read()
+
+            if len(data) >= MAX_VIDEO_CACHE_BYTES:
+                return
+
+            def _write_cache() -> None:
+                temp_file.write_bytes(data)
+                temp_file.replace(cache_file)
+
+            await self.hass.async_add_executor_job(_write_cache)
+            _LOGGER.debug("Cached Immich video %s", asset_id)
+        except Exception as err:
+            _LOGGER.debug("Could not cache Immich video %s: %s", asset_id, err)
+            try:
+                await self.hass.async_add_executor_job(temp_file.unlink, True)
+            except FileNotFoundError:
+                pass
+        finally:
+            self._video_cache_in_progress.discard(asset_id)
 
     @staticmethod
     def _compose_side_by_side(left_bytes: bytes, right_bytes: bytes) -> bytes:
@@ -358,6 +446,8 @@ class ImmichCamera(Camera):
                         await self.hass.async_add_executor_job(
                             cache_file.write_bytes, data
                         )
+                    if asset.get("type") == ASSET_TYPE_VIDEO:
+                        self._schedule_video_cache(asset_id)
                 else:
                     await self._serve_from_cache(cache_file)
         except Exception as err:

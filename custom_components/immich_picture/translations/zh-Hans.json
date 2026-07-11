@@ -1,0 +1,111 @@
+{
+  "entity": {
+    "sensor": {
+      "cache_path": {
+        "name": "图片缓存路径"
+      }
+    }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "连接到 Immich Picture",
+        "description": "请输入 Immich 服务器地址和 API 密钥。可在 Immich 的“账户设置 → API 密钥”中创建 API 密钥。",
+        "data": {
+          "host": "Immich URL",
+          "api_key": "API 密钥"
+        },
+        "data_description": {
+          "host": "包含端口的完整 URL，例如：http://192.168.1.100:2283",
+          "api_key": "您的 Immich API 密钥（将被安全保存）"
+        }
+      },
+      "account": {
+        "title": "选择 Immich 账户",
+        "description": "为新的媒体来源复用已有 Immich 连接，或连接新的账户。",
+        "data": {
+          "account": "Immich 账户"
+        }
+      },
+      "endpoint": {
+        "title": "选择 API 端点",
+        "description": "选择幻灯片用于获取媒体的 Immich API 端点。",
+        "data": {
+          "api_endpoint": "端点"
+        }
+      },
+      "random_params": {
+        "title": "随机资产选项",
+        "description": "设置每次刷新加载的随机媒体数量。可选填 JSON 请求体来筛选结果（例如按人物筛选）。示例：{example}\n\n[API 文档]({docs_url})",
+        "data": {
+          "asset_count": "资产数量",
+          "random_query": "筛选条件（JSON，可选）"
+        }
+      },
+      "all_params": {
+        "title": "全部资产选项",
+        "description": "设置加载的媒体数量和排序方式。",
+        "data": {
+          "asset_count": "资产数量",
+          "order": "排序方式"
+        }
+      },
+      "album_params": {
+        "title": "相册资产选项",
+        "description": "选择要用作媒体来源的相册。",
+        "data": {
+          "album_id": "相册",
+          "asset_count": "资产数量"
+        }
+      },
+      "favorites_params": {
+        "title": "收藏资产选项",
+        "description": "设置每次刷新加载的收藏媒体数量。",
+        "data": {
+          "asset_count": "资产数量"
+        }
+      },
+      "search_params": {
+        "title": "按元数据搜索选项",
+        "description": "请输入 Immich 搜索元数据字段组成的 JSON 对象。示例：{example}\n\n[API 文档]({docs_url})",
+        "data": {
+          "asset_count": "结果数量",
+          "search_query": "搜索条件（JSON）"
+        }
+      },
+      "intervals": {
+        "title": "时间设置",
+        "description": "设置媒体轮播间隔，以及从 Immich Picture 获取新媒体的频率。",
+        "data": {
+          "rotation_interval": "媒体轮播间隔（秒）",
+          "scan_interval": "API 刷新间隔（秒）"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "无法连接到 Immich。请检查 URL 并确认 Immich 可以访问。",
+      "invalid_auth": "API 密钥无效。请检查您的 Immich API 密钥。",
+      "cannot_fetch_albums": "无法从 Immich 加载相册。该项将留空；您可以手动输入相册 ID。",
+      "invalid_json": "必须是有效的 JSON 对象，例如：{\"city\": \"Paris\"}"
+    },
+    "abort": {
+      "already_configured": "此 Immich Picture 实例已配置。"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Immich Picture 选项",
+        "data": {
+          "rotation_interval": "媒体轮播间隔（秒）",
+          "scan_interval": "API 刷新间隔（秒）",
+          "asset_count": "加载的资产数量",
+          "api_params": "筛选条件（JSON）"
+        },
+        "data_description": {
+          "api_params": "每次 API 请求发送的 JSON 请求体。可用字段请参阅 [API 文档]({docs_url})。"
+        }
+      }
+    }
+  }
+}
