@@ -25,6 +25,17 @@
       const stateUrl = `${window.location.pathname}/state${window.location.search}`;
       let currentRevision = null;
       let snapshotUrl = null;
+      let refreshTimer = null;
+
+      function scheduleRefresh(nextRotationAt) {
+        const fallbackDelay = 15000;
+        const rotationDelay = Number(nextRotationAt) * 1000 - Date.now() + 300;
+        const delay = Number.isFinite(rotationDelay)
+          ? Math.max(500, Math.min(fallbackDelay, rotationDelay))
+          : fallbackDelay;
+        if (refreshTimer) window.clearTimeout(refreshTimer);
+        refreshTimer = window.setTimeout(refresh, delay);
+      }
 
       function showMessage(text) {
         message.textContent = text;
@@ -62,6 +73,7 @@
       });
 
       async function refresh() {
+        let nextRotationAt = null;
         try {
           const response = await fetch(stateUrl, {
             cache: "no-store",
@@ -69,6 +81,7 @@
           });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const state = await response.json();
+          nextRotationAt = state.next_rotation_at;
           if (!state.revision) {
             showMessage("No media is available yet.");
             return;
@@ -83,12 +96,18 @@
             showImage(snapshotUrl);
           }
         } catch (err) {
-          showMessage("Waiting for Home Assistant media state…");
+          showMessage("Waiting for Home Assistant media state.");
         } finally {
-          window.setTimeout(refresh, 1000);
+          scheduleRefresh(nextRotationAt);
         }
       }
 
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+          if (refreshTimer) window.clearTimeout(refreshTimer);
+          refresh();
+        }
+      });
       refresh();
     </script>
   </body>

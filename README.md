@@ -135,21 +135,18 @@ Changes take effect immediately — the integration reloads automatically when y
 
 ## Image Cache
 
-Every image or video thumbnail that is successfully downloaded is written to a slot file named after its position in the slideshow. Videos smaller than 50 MiB are also cached by Immich asset ID for local playback:
+Every image and video thumbnail that is successfully downloaded is written to a JPEG file named for its Immich asset ID. Portrait pairs use their combined slide ID. Videos smaller than 50 MiB are also cached by Immich asset ID for local playback:
 
 ```
-<ha-config-dir>/immich_picture/image_cache/<entry-id>/0.jpg
-<ha-config-dir>/immich_picture/image_cache/<entry-id>/1.jpg
-…
-<ha-config-dir>/immich_picture/image_cache/<entry-id>/N.jpg
+<ha-config-dir>/immich_picture/image_cache/<entry-id>/<asset-id>.jpg
 <ha-config-dir>/immich_picture/image_cache/<entry-id>/<asset-id>.mp4
 ```
 
-JPEG slot files are capped at the configured **Number of assets** value. Cached MP4 files are retained only while their assets are in the current pool; the next Immich refresh removes stale video files and interrupted downloads.
+JPEG and MP4 files are retained only while their assets are in the current pool; the next Immich refresh removes stale media files and interrupted downloads. Existing numbered JPEG cache files from versions before 1.6.0 remain available during upgrade as a startup fallback, then are removed after the first successful new-format JPEG cache write.
 
 **When Immich is available** the slot file is overwritten with the freshest image or video preview for that position. The built-in player prefers a cached MP4, falling back to Immich when a video is at least 50 MiB or has no known size.
 
-**When Immich is unreachable** (planned downtime, network outage, server restart) the integration serves the last cached file for that slot instead of showing a blank or broken image. If a slot has never been fetched before and has no cache file yet, the previously displayed image is preserved unchanged.
+**When Immich is unreachable** (planned downtime, network outage, server restart) the integration serves the cached file for the selected asset instead of showing a blank or incorrect image. If that asset has never been fetched before and has no cache file yet, the previously displayed image is preserved unchanged.
 
 Deleting a configuration entry removes its entire cache directory, including JPEG previews, cached MP4 files, and unfinished downloads. You can also delete a cache directory manually; it is recreated automatically on the next successful fetch.
 
@@ -198,13 +195,23 @@ Use the complete `player_url` value, including its `token` query parameter, rath
 
 **Images stop updating but the card still shows a photo** — Immich is likely unreachable; the cache is being served. The integration will resume live images automatically once Immich is back.
 
-**"Unable to connect" during setup** — verify the URL includes the port (e.g. `http://192.168.1.100:2283`) and that the API key is correct.
+**"Unable to connect" during setup** – verify the URL includes the port (e.g. `http://192.168.1.100:2283`) and that the API key is correct.
+
+**API key expired or revoked** – Home Assistant opens a reauthentication form after Immich returns `401`. Enter the replacement key once; every source using the same previous account credentials is updated and reloaded.
 
 **JSON filter rejected** — the field must be a valid JSON *object* (curly-brace wrapper, not an array). Use a tool like [jsonlint.com](https://jsonlint.com) to validate before pasting.
 
 ---
 
 ## Changelog
+
+### 1.6.0
+
+- **Reliable media cache** – JPEG files now use asset IDs and atomic writes, preventing an outdated slideshow slot from being shown for another asset.
+- **Lower-memory video cache** – short MP4 files are streamed to disk in chunks and cache work is cancelled safely during reload or removal.
+- **Smoother player sync** – the built-in player uses the planned rotation time instead of polling Home Assistant every second.
+- **Saved-account improvements** – duplicate account choices are merged, and reauthentication updates all matching sources.
+- **Repository metadata** – documentation and repository links now point to this project.
 
 ### 1.5.1
 

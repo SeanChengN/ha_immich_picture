@@ -82,6 +82,13 @@
         }
       }
     },
+    "reauth_confirm": {
+      "title": "重新连接 Immich",
+      "description": "请输入此 Immich 账户的新 API 密钥。使用相同已保存凭据的所有来源都会一并更新。",
+      "data": {
+        "api_key": "API 密钥"
+      }
+    },
     "error": {
       "cannot_connect": "无法连接到 Immich。请检查 URL 并确认 Immich 可以访问。",
       "invalid_auth": "API 密钥无效。请检查您的 Immich API 密钥。",
@@ -89,7 +96,9 @@
       "invalid_json": "必须是有效的 JSON 对象，例如：{\"city\": \"Paris\"}"
     },
     "abort": {
-      "already_configured": "此 Immich Picture 实例已配置。"
+      "already_configured": "此 Immich Picture 实例已配置。",
+      "reauth_success": "Immich API 密钥已更新。",
+      "reauth_entry_not_found": "找不到需要更新的配置项。"
     }
   },
   "options": {

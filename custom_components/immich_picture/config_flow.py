@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Any
 
@@ -71,6 +72,7 @@ class ImmichConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._albums: list[dict[str, Any]] = []
         self._collected: dict[str, Any] = {}
         self._use_new_account = False
+        self._reauth_entry: config_entries.ConfigEntry | None = None
 
     # ------------------------------------------------------------------
     # Step 1 – host + API key
@@ -97,12 +99,11 @@ class ImmichConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._api_key = api_key
                 return await self.async_step_endpoint()
 
-        # Pre-populate from an existing entry so the user doesn't have to
-        # re-type the same host/key when adding a second endpoint.
+        # Suggest a prior host, but never render a stored API key back into a
+        # form. Saved accounts are selected in the preceding account step.
         existing = self.hass.config_entries.async_entries(DOMAIN)
         prev = existing[0].data if existing else {}
         suggested_host = prev.get(CONF_HOST, "http://192.168.1.100:2283")
-        suggested_key = prev.get(CONF_API_KEY, "")
 
         return self.async_show_form(
             step_id="user",
@@ -114,10 +115,7 @@ class ImmichConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     ): TextSelector(
                         TextSelectorConfig(type=TextSelectorType.URL)
                     ),
-                    vol.Required(
-                        CONF_API_KEY,
-                        description={"suggested_value": suggested_key},
-                    ): TextSelector(
+                    vol.Required(CONF_API_KEY): TextSelector(
                         TextSelectorConfig(type=TextSelectorType.PASSWORD)
                     ),
                 }
@@ -215,6 +213,65 @@ class ImmichConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
                 }
             ),
+        )
+
+    # ------------------------------------------------------------------
+    # Reauthentication
+    # ------------------------------------------------------------------
+
+    async def async_step_reauth(
+        self, _entry_data: dict[str, Any]
+    ) -> config_entries.FlowResult:
+        """Start reauthentication for an existing Immich account."""
+        entry_id = self.context.get("entry_id")
+        self._reauth_entry = (
+            self.hass.config_entries.async_get_entry(entry_id) if entry_id else None
+        )
+        if self._reauth_entry is None:
+            return self.async_abort(reason="reauth_entry_not_found")
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.FlowResult:
+        """Validate and apply a replacement API key to matching sources."""
+        if self._reauth_entry is None:
+            return self.async_abort(reason="reauth_entry_not_found")
+
+        errors: dict[str, str] = {}
+        host = self._reauth_entry.data[CONF_HOST].rstrip("/")
+        old_api_key = self._reauth_entry.data[CONF_API_KEY]
+        if user_input is not None:
+            api_key = user_input[CONF_API_KEY]
+            error = await self._test_credentials(host, api_key)
+            if error:
+                errors["base"] = error
+            else:
+                matching_entries = [
+                    entry
+                    for entry in self.hass.config_entries.async_entries(DOMAIN)
+                    if entry.data.get(CONF_HOST, "").rstrip("/") == host
+                    and entry.data.get(CONF_API_KEY) == old_api_key
+                ]
+                for entry in matching_entries:
+                    self.hass.config_entries.async_update_entry(
+                        entry,
+                        data={**entry.data, CONF_API_KEY: api_key},
+                    )
+                # Each active entry registers an update listener that reloads
+                # it after async_update_entry notifies the listener.
+                return self.async_abort(reason="reauth_success")
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_API_KEY): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    )
+                }
+            ),
+            errors=errors,
         )
 
     # ------------------------------------------------------------------
@@ -461,12 +518,20 @@ class ImmichConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # ------------------------------------------------------------------
 
     def _saved_account_entries(self) -> list[config_entries.ConfigEntry]:
-        """Return entries that can supply saved Immich credentials."""
-        return [
-            entry
-            for entry in self.hass.config_entries.async_entries(DOMAIN)
-            if entry.data.get(CONF_HOST) and entry.data.get(CONF_API_KEY)
-        ]
+        """Return one representative entry for each saved account."""
+        accounts: dict[str, config_entries.ConfigEntry] = {}
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            host = entry.data.get(CONF_HOST, "").rstrip("/")
+            api_key = entry.data.get(CONF_API_KEY, "")
+            if not host or not api_key:
+                continue
+            accounts.setdefault(self._account_fingerprint(host, api_key), entry)
+        return list(accounts.values())
+
+    @staticmethod
+    def _account_fingerprint(host: str, api_key: str) -> str:
+        """Return a non-reversible stable identifier for a saved account."""
+        return hashlib.sha256(f"{host}\0{api_key}".encode()).hexdigest()
 
     async def _test_credentials(self, host: str, api_key: str) -> str | None:
         """Return an error key string, or None on success."""

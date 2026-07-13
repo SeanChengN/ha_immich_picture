@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-import io
+import asyncio
+import contextlib
 import hashlib
 import hmac
+import io
 import logging
 import pathlib
+import time
 from datetime import timedelta
 from typing import Any
 
@@ -82,8 +85,14 @@ class ImmichCamera(Camera):
         self._current_index: int = 0
         self._current_image_bytes: bytes | None = None
         self._rotation_unsubscribe = None
+        self._rotation_interval = DEFAULT_ROTATION_INTERVAL
+        self._next_rotation_at: float | None = None
         self._cache_dir: pathlib.Path | None = None
-        self._video_cache_in_progress: set[str] = set()
+        self._media_revision = 0
+        self._load_task: asyncio.Task[None] | None = None
+        self._video_cache_tasks: dict[str, asyncio.Task[None]] = {}
+        self._is_removed = False
+        self._legacy_jpegs_cleaned = False
 
         endpoint_label = API_ENDPOINTS.get(
             config_entry.data.get(CONF_API_ENDPOINT, ""), "Immich Picture"
@@ -130,26 +139,41 @@ class ImmichCamera(Camera):
         )
 
         # Start the rotation timer
-        rotation_interval = self._config_entry.options.get(
+        self._rotation_interval = self._config_entry.options.get(
             CONF_ROTATION_INTERVAL,
             self._config_entry.data.get(CONF_ROTATION_INTERVAL, DEFAULT_ROTATION_INTERVAL),
         )
+        self._next_rotation_at = time.time() + self._rotation_interval
         self._rotation_unsubscribe = async_track_time_interval(
             self.hass,
             self._async_rotate,
-            timedelta(seconds=rotation_interval),
+            timedelta(seconds=self._rotation_interval),
         )
 
         # Load the first image
-        await self._load_current_image()
+        await self._schedule_current_media_load()
 
     async def async_will_remove_from_hass(self) -> None:
         """Clean up the rotation timer."""
+        self._is_removed = True
         if self._rotation_unsubscribe is not None:
             self._rotation_unsubscribe()
+            self._rotation_unsubscribe = None
+
+        tasks = [task for task in [self._load_task, *self._video_cache_tasks.values()] if task]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._video_cache_tasks.clear()
+
+        if self._cache_dir is not None:
+            await self.hass.async_add_executor_job(self._remove_partial_cache_files)
+
         cameras = self.hass.data.get(DOMAIN, {}).get(DATA_CAMERAS, {})
         if cameras.get(self._config_entry.entry_id) is self:
             cameras.pop(self._config_entry.entry_id)
+        await super().async_will_remove_from_hass()
 
     # ------------------------------------------------------------------
     # Camera interface
@@ -197,6 +221,16 @@ class ImmichCamera(Camera):
             return None
         return assets[min(self._current_index, len(assets) - 1)]
 
+    @property
+    def media_revision(self) -> int:
+        """Return the revision of the media currently displayed."""
+        return self._media_revision
+
+    @property
+    def next_rotation_at(self) -> float | None:
+        """Return the next planned rotation as a Unix timestamp."""
+        return self._next_rotation_at
+
     def has_video_asset(self, asset_id: str) -> bool:
         """Return whether an asset is a video in the current media pool."""
         return any(
@@ -228,27 +262,71 @@ class ImmichCamera(Camera):
         if assets and self._current_index >= len(assets):
             self._current_index = 0
 
-        # Schedule fetching the new current image without blocking the callback
-        self.hass.async_create_task(self._load_current_image())
+        # A fresh pool can change the current asset at the same index. Cancel
+        # any older fetch so a slow response cannot replace the new media.
+        self._schedule_current_media_load()
 
-        # Prune any slot files beyond the new asset count
+        # Prune cache entries which are no longer in the current media pool.
         if self._cache_dir is not None:
-            self.hass.async_create_task(self._prune_cache(len(assets), assets))
+            self.hass.async_create_task(self._prune_cache(assets))
 
         self.async_write_ha_state()
 
     async def _async_rotate(self, _now=None) -> None:
         """Advance to the next photo in the list."""
+        self._next_rotation_at = time.time() + self._rotation_interval
         assets = self._coordinator.data
         if not assets:
             return
 
         self._current_index = (self._current_index + 1) % len(assets)
-        await self._load_current_image()
+        try:
+            await self._schedule_current_media_load()
+        except asyncio.CancelledError:
+            # A coordinator update has already scheduled a newer media load.
+            if self._is_removed:
+                raise
         self.async_write_ha_state()
 
-    async def _prune_cache(self, keep: int, assets: list[dict[str, Any]]) -> None:
-        """Prune obsolete image slots and video files outside the asset pool."""
+    def _schedule_current_media_load(self) -> asyncio.Task[None]:
+        """Start loading the selected media, superseding any older request."""
+        self._media_revision += 1
+        if self._load_task is not None and not self._load_task.done():
+            self._load_task.cancel()
+
+        asset = self.current_asset
+        if asset is None or self._is_removed:
+            self._load_task = self.hass.async_create_task(self._load_current_image(None, 0))
+            return self._load_task
+
+        self._load_task = self.hass.async_create_task(
+            self._load_current_image(asset, self._media_revision)
+        )
+        return self._load_task
+
+    @staticmethod
+    def _asset_cache_id(asset: dict[str, Any]) -> str | None:
+        """Return the cache filename stem for a single slide."""
+        asset_id = asset.get("id")
+        if not asset_id:
+            return None
+        return str(asset_id)
+
+    def _cached_image_path(self, asset: dict[str, Any]) -> pathlib.Path | None:
+        """Return the JPEG cache path for a slide, if caching is available."""
+        if self._cache_dir is None:
+            return None
+        if cache_id := self._asset_cache_id(asset):
+            return self._cache_dir / f"{cache_id}.jpg"
+        return None
+
+    async def _prune_cache(self, assets: list[dict[str, Any]]) -> None:
+        """Prune media files outside the current asset pool."""
+        image_ids = {
+            cache_id
+            for asset in assets
+            if (cache_id := self._asset_cache_id(asset)) is not None
+        }
         video_ids = {
             str(asset["id"])
             for asset in assets
@@ -258,9 +336,19 @@ class ImmichCamera(Camera):
         def _delete_excess() -> None:
             for f in self._cache_dir.glob("*.jpg"):
                 try:
-                    if int(f.stem) >= keep:
+                    # Numeric JPEGs are the legacy index cache. They remain
+                    # available for startup fallback until a new cache write.
+                    if not f.stem.isdecimal() and f.stem not in image_ids:
                         f.unlink()
-                except (ValueError, OSError):
+                except OSError:
+                    pass
+
+            for f in self._cache_dir.glob("*.jpg.part"):
+                try:
+                    cache_id = f.name.removesuffix(".jpg.part")
+                    if cache_id not in image_ids:
+                        f.unlink()
+                except OSError:
                     pass
 
             for f in self._cache_dir.glob("*.mp4"):
@@ -279,6 +367,38 @@ class ImmichCamera(Camera):
                     pass
 
         await self.hass.async_add_executor_job(_delete_excess)
+
+    def _remove_partial_cache_files(self) -> None:
+        """Remove interrupted cache writes after all worker tasks stop."""
+        if self._cache_dir is None:
+            return
+        for pattern in ("*.jpg.part", "*.mp4.part"):
+            for cache_file in self._cache_dir.glob(pattern):
+                with contextlib.suppress(OSError):
+                    cache_file.unlink()
+
+    @staticmethod
+    def _atomic_write(path: pathlib.Path, data: bytes) -> None:
+        """Write bytes atomically so readers never observe a partial file."""
+        temp_file = path.with_suffix(path.suffix + ".part")
+        temp_file.write_bytes(data)
+        temp_file.replace(path)
+
+    async def _write_image_cache(self, cache_file: pathlib.Path, data: bytes) -> None:
+        """Atomically save a thumbnail and retire legacy cache slots once."""
+        await self.hass.async_add_executor_job(self._atomic_write, cache_file, data)
+        if not self._legacy_jpegs_cleaned:
+            await self.hass.async_add_executor_job(self._remove_legacy_jpegs)
+            self._legacy_jpegs_cleaned = True
+
+    def _remove_legacy_jpegs(self) -> None:
+        """Remove numbered JPEG caches after a successful cache migration."""
+        if self._cache_dir is None:
+            return
+        for cache_file in self._cache_dir.glob("*.jpg"):
+            if cache_file.stem.isdecimal():
+                with contextlib.suppress(OSError):
+                    cache_file.unlink()
 
     async def _fetch_single_thumbnail(self, asset_id: str) -> bytes | None:
         """Fetch a single thumbnail from Immich, returning raw bytes or None."""
@@ -310,17 +430,17 @@ class ImmichCamera(Camera):
 
     def _schedule_video_cache(self, asset_id: str) -> None:
         """Start caching the current short video without blocking rotation."""
-        if asset_id in self._video_cache_in_progress:
+        if asset_id in self._video_cache_tasks:
             return
         if self.cached_video_path(asset_id) is not None:
             return
-        self._video_cache_in_progress.add(asset_id)
-        self.hass.async_create_task(self._async_cache_video(asset_id))
+        self._video_cache_tasks[asset_id] = self.hass.async_create_task(
+            self._async_cache_video(asset_id)
+        )
 
     async def _async_cache_video(self, asset_id: str) -> None:
         """Cache a video only when Immich reports it is below the size limit."""
         if self._cache_dir is None:
-            self._video_cache_in_progress.discard(asset_id)
             return
 
         cache_file = self._cache_dir / f"{asset_id}.mp4"
@@ -328,6 +448,8 @@ class ImmichCamera(Camera):
         session = async_get_clientsession(self.hass)
         url = f"{self._coordinator.host}/api/assets/{asset_id}/video/playback"
         headers = {"x-api-key": self._coordinator.api_key, "Range": "bytes=0-0"}
+        completed = False
+        file_handle = None
 
         try:
             async with session.get(url, headers=headers, timeout=15) as resp:
@@ -335,7 +457,8 @@ class ImmichCamera(Camera):
                 total_text = content_range.rsplit("/", 1)[-1]
                 if resp.status != 206 or not total_text.isdecimal():
                     return
-                if int(total_text) >= MAX_VIDEO_CACHE_BYTES:
+                expected_size = int(total_text)
+                if expected_size >= MAX_VIDEO_CACHE_BYTES:
                     return
 
             async with session.get(
@@ -345,25 +468,45 @@ class ImmichCamera(Camera):
             ) as resp:
                 if resp.status != 200:
                     return
-                data = await resp.read()
+                content_length = resp.content_length
+                if content_length is not None and content_length >= MAX_VIDEO_CACHE_BYTES:
+                    return
 
-            if len(data) >= MAX_VIDEO_CACHE_BYTES:
+                await self.hass.async_add_executor_job(temp_file.unlink, True)
+                file_handle = await self.hass.async_add_executor_job(
+                    temp_file.open, "xb"
+                )
+                downloaded = 0
+                async for chunk in resp.content.iter_chunked(64 * 1024):
+                    downloaded += len(chunk)
+                    if downloaded >= MAX_VIDEO_CACHE_BYTES:
+                        return
+                    await self.hass.async_add_executor_job(file_handle.write, chunk)
+
+            if downloaded != expected_size:
                 return
 
-            def _write_cache() -> None:
-                temp_file.write_bytes(data)
-                temp_file.replace(cache_file)
+            if self._is_removed or not self.has_video_asset(asset_id):
+                return
 
-            await self.hass.async_add_executor_job(_write_cache)
+            await self.hass.async_add_executor_job(file_handle.close)
+            file_handle = None
+            await self.hass.async_add_executor_job(temp_file.replace, cache_file)
+            completed = True
             _LOGGER.debug("Cached Immich video %s", asset_id)
+        except asyncio.CancelledError:
+            raise
         except Exception as err:
             _LOGGER.debug("Could not cache Immich video %s: %s", asset_id, err)
-            try:
-                await self.hass.async_add_executor_job(temp_file.unlink, True)
-            except FileNotFoundError:
-                pass
         finally:
-            self._video_cache_in_progress.discard(asset_id)
+            if file_handle is not None:
+                with contextlib.suppress(OSError):
+                    await self.hass.async_add_executor_job(file_handle.close)
+            if not completed:
+                with contextlib.suppress(FileNotFoundError, OSError):
+                    await self.hass.async_add_executor_job(temp_file.unlink)
+            if self._video_cache_tasks.get(asset_id) is asyncio.current_task():
+                self._video_cache_tasks.pop(asset_id, None)
 
     @staticmethod
     def _compose_side_by_side(left_bytes: bytes, right_bytes: bytes) -> bytes:
@@ -392,7 +535,9 @@ class ImmichCamera(Camera):
         combined.save(buf, format="JPEG", quality=85)
         return buf.getvalue()
 
-    async def _load_current_image(self) -> None:
+    async def _load_current_image(
+        self, asset: dict[str, Any] | None, revision: int
+    ) -> None:
         """Fetch image bytes for the current asset from Immich.
 
         On success the bytes are written to disk so they can be served if
@@ -400,19 +545,14 @@ class ImmichCamera(Camera):
         the cached file for this asset is used instead; if no cache exists the
         last in-memory image is preserved unchanged.
         """
-        assets = self._coordinator.data
-        if not assets:
+        if asset is None or revision == 0:
             return
 
-        idx = min(self._current_index, len(assets) - 1)
-        asset = assets[idx]
         asset_id = asset.get("id")
         if not asset_id:
             return
 
-        cache_file = (
-            self._cache_dir / f"{idx}.jpg" if self._cache_dir is not None else None
-        )
+        cache_file = self._cached_image_path(asset)
 
         try:
             if asset.get("is_portrait_pair"):
@@ -426,33 +566,35 @@ class ImmichCamera(Camera):
                     data = await self.hass.async_add_executor_job(
                         self._compose_side_by_side, left_bytes, right_bytes
                     )
+                    if revision != self._media_revision or self._is_removed:
+                        return
                     self._current_image_bytes = data
                     if cache_file is not None:
-                        await self.hass.async_add_executor_job(
-                            cache_file.write_bytes, data
-                        )
+                        await self._write_image_cache(cache_file, data)
                 else:
                     _LOGGER.warning(
                         "Could not fetch both portrait thumbnails for pair %s",
                         asset_id,
                     )
-                    await self._serve_from_cache(cache_file)
+                    await self._serve_from_cache(cache_file, revision)
             else:
-                # Single landscape image
+                # A single image or video thumbnail
                 data = await self._fetch_single_thumbnail(asset_id)
                 if data:
+                    if revision != self._media_revision or self._is_removed:
+                        return
                     self._current_image_bytes = data
                     if cache_file is not None:
-                        await self.hass.async_add_executor_job(
-                            cache_file.write_bytes, data
-                        )
+                        await self._write_image_cache(cache_file, data)
                     if asset.get("type") == ASSET_TYPE_VIDEO:
                         self._schedule_video_cache(asset_id)
                 else:
-                    await self._serve_from_cache(cache_file)
+                    await self._serve_from_cache(cache_file, revision)
+        except asyncio.CancelledError:
+            raise
         except Exception as err:
             _LOGGER.debug("Error fetching Immich thumbnail for %s: %s", asset_id, err)
-            await self._serve_from_cache(cache_file)
+            await self._serve_from_cache(cache_file, revision)
 
     async def _restore_startup_image_from_cache(self) -> None:
         """Restore the first available cached image during Home Assistant startup."""
@@ -466,29 +608,35 @@ class ImmichCamera(Camera):
             await self._serve_from_cache(cache_file)
 
     def _find_first_cached_image(self) -> pathlib.Path | None:
-        """Return the lowest-numbered cached slot file, if any exists."""
+        """Return the most recently written JPEG cache file, if any exists."""
         if self._cache_dir is None:
             return None
 
-        candidates: list[tuple[int, pathlib.Path]] = []
+        candidates: list[pathlib.Path] = []
         for cache_file in self._cache_dir.glob("*.jpg"):
             try:
-                candidates.append((int(cache_file.stem), cache_file))
-            except ValueError:
+                cache_file.stat()
+                candidates.append(cache_file)
+            except OSError:
                 continue
 
         if not candidates:
             return None
 
-        candidates.sort(key=lambda item: item[0])
-        return candidates[0][1]
+        return max(candidates, key=lambda cache_file: cache_file.stat().st_mtime)
 
-    async def _serve_from_cache(self, cache_file: pathlib.Path | None) -> None:
+    async def _serve_from_cache(
+        self, cache_file: pathlib.Path | None, revision: int | None = None
+    ) -> None:
         """Load image bytes from the on-disk cache for this asset, if available."""
         if cache_file is None:
             return
         try:
             data = await self.hass.async_add_executor_job(cache_file.read_bytes)
+            if revision is not None and (
+                revision != self._media_revision or self._is_removed
+            ):
+                return
             self._current_image_bytes = data
             _LOGGER.debug("Serving cached image: %s", cache_file.name)
         except FileNotFoundError:

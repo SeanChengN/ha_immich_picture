@@ -2,9 +2,9 @@
   "domain": "immich_picture",
   "name": "Immich Picture",
   "config_flow": true,
-  "documentation": "https://github.com/remy/ha_immich_picture/",
+  "documentation": "https://github.com/SeanChengN/ha_immich_picture/",
   "requirements": [],
   "codeowners": [],
-  "version": "1.5.1",
+  "version": "1.6.0",
   "iot_class": "local_polling"
 }

@@ -77,7 +77,7 @@ class ImmichPlayerStateView(_ImmichPlayerView):
 
         asset_id = asset.get("id")
         asset_type = asset.get("type")
-        revision = f"{camera._current_index}:{asset_id}"
+        revision = f"{camera.media_revision}:{asset_id}"
         snapshot_url = (
             f"/api/camera_proxy/{camera.entity_id}?token={camera.access_tokens[-1]}"
             f"&v={quote(revision)}"
@@ -95,6 +95,7 @@ class ImmichPlayerStateView(_ImmichPlayerView):
                 "asset_id": asset_id,
                 "asset_type": asset_type,
                 "revision": revision,
+                "next_rotation_at": camera.next_rotation_at,
                 "snapshot_url": snapshot_url,
                 "video_url": video_url,
             },

@@ -82,6 +82,13 @@
         }
       }
     },
+    "reauth_confirm": {
+      "title": "Reconnect to Immich",
+      "description": "Enter a new API key for this Immich account. All sources using the same saved credentials will be updated.",
+      "data": {
+        "api_key": "API Key"
+      }
+    },
     "error": {
       "cannot_connect": "Unable to connect to Immich. Check the URL and ensure Immich is reachable.",
       "invalid_auth": "Invalid API key. Please check your Immich API key.",
@@ -89,7 +96,9 @@
       "invalid_json": "Must be a valid JSON object, e.g. {\"city\": \"Paris\"}"
     },
     "abort": {
-      "already_configured": "This Immich Picture instance is already configured."
+      "already_configured": "This Immich Picture instance is already configured.",
+      "reauth_success": "Immich API key updated.",
+      "reauth_entry_not_found": "The configuration entry to update could not be found."
     }
   },
   "options": {

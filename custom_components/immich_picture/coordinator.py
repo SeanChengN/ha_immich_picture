@@ -6,7 +6,10 @@ import logging
 from datetime import timedelta
 from typing import Any
 
+from aiohttp import ClientResponseError
+
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -77,6 +80,10 @@ class ImmichDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
 
         try:
             assets = await self._fetch_assets(session)
+        except ClientResponseError as err:
+            if err.status == 401:
+                raise ConfigEntryAuthFailed("Immich API key is no longer valid") from err
+            raise UpdateFailed(f"Error communicating with Immich API: {err}") from err
         except Exception as err:
             raise UpdateFailed(f"Error communicating with Immich API: {err}") from err
 
