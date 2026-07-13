@@ -27,6 +27,23 @@ _VIDEO_RESPONSE_HEADERS = (
     hdrs.LAST_MODIFIED,
 )
 
+_PLAYER_SECURITY_HEADERS = {
+    hdrs.CACHE_CONTROL: "no-store",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": (
+        "default-src 'self'; base-uri 'none'; form-action 'none'; "
+        "frame-ancestors 'self'; connect-src 'self'; img-src 'self'; "
+        "media-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"
+    ),
+}
+
+_MEDIA_SECURITY_HEADERS = {
+    hdrs.CACHE_CONTROL: "no-store",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+}
+
 
 class _ImmichPlayerView(HomeAssistantView):
     """Base class for views that need an active Immich camera."""
@@ -58,7 +75,7 @@ class ImmichPlayerPageView(_ImmichPlayerView):
         """Return the player page for an active config entry."""
         self._get_camera(request, entry_id)
         response = web.FileResponse(Path(__file__).with_name("player.html"))
-        response.headers[hdrs.CACHE_CONTROL] = "no-store"
+        response.headers.update(_PLAYER_SECURITY_HEADERS)
         return response
 
 
@@ -99,7 +116,7 @@ class ImmichPlayerStateView(_ImmichPlayerView):
                 "snapshot_url": snapshot_url,
                 "video_url": video_url,
             },
-            headers={hdrs.CACHE_CONTROL: "no-store"},
+            headers=_MEDIA_SECURITY_HEADERS,
         )
 
 
@@ -117,8 +134,10 @@ class ImmichVideoPlaybackView(_ImmichPlayerView):
         if not camera.has_video_asset(asset_id):
             raise web.HTTPNotFound
 
-        if cache_file := camera.cached_video_path(asset_id):
-            return web.FileResponse(cache_file)
+        if cache_file := await camera.async_cached_video_path(asset_id):
+            response = web.FileResponse(cache_file)
+            response.headers.update(_MEDIA_SECURITY_HEADERS)
+            return response
 
         upstream_headers = {"x-api-key": camera._coordinator.api_key}
         for header in (hdrs.RANGE, hdrs.IF_RANGE):
@@ -147,6 +166,7 @@ class ImmichVideoPlaybackView(_ImmichPlayerView):
                     for header in _VIDEO_RESPONSE_HEADERS
                     if (value := upstream.headers.get(header)) is not None
                 }
+                response_headers.update(_MEDIA_SECURITY_HEADERS)
                 response = web.StreamResponse(
                     status=upstream.status,
                     headers=response_headers,

@@ -142,7 +142,7 @@ Every image and video thumbnail that is successfully downloaded is written to a 
 <ha-config-dir>/immich_picture/image_cache/<entry-id>/<asset-id>.mp4
 ```
 
-JPEG and MP4 files are retained only while their assets are in the current pool; the next Immich refresh removes stale media files and interrupted downloads. Existing numbered JPEG cache files from versions before 1.6.0 remain available during upgrade as a startup fallback, then are removed after the first successful new-format JPEG cache write.
+JPEG and MP4 files are retained only while their assets are in the current pool; the next Immich refresh removes stale media files and interrupted downloads. MP4 cache files are capped at **500 MiB per configuration entry**; least-recently-used videos are removed when the budget is exceeded. Existing numbered JPEG cache files from versions before 1.6.0 remain available during upgrade as a startup fallback, then are removed after the first successful new-format JPEG cache write.
 
 **When Immich is available** the slot file is overwritten with the freshest image or video preview for that position. The built-in player prefers a cached MP4, falling back to Immich when a video is at least 50 MiB or has no known size.
 
@@ -187,6 +187,8 @@ disable_sandbox: true
 
 Use the complete `player_url` value, including its `token` query parameter, rather than manually constructing this URL. The token grants access only to this player's current media pool, and the player proxies video requests to Immich without exposing the API key. Treat `player_url` as a secret and do not expose it through an unauthenticated reverse proxy. Videos start muted to satisfy browser autoplay policies; use the player controls to enable sound after interacting with the page.
 
+If a player URL is exposed, rotate it from **Developer Tools → Actions** with `immich_picture.rotate_player_token`. Provide `entry_id` to rotate one slideshow, or omit it to rotate every Immich Picture player. This invalidates the old URL; copy the refreshed `player_url` attribute into the Webpage card afterward.
+
 ---
 
 ## Troubleshooting
@@ -204,6 +206,13 @@ Use the complete `player_url` value, including its `token` query parameter, rath
 ---
 
 ## Changelog
+
+### 1.7.0
+
+- **Bounded video cache** – one download runs per slideshow and cached MP4 files use a 500 MiB LRU budget.
+- **Safer player URLs** – added token rotation, restrictive response headers, and stale-request protection in the player page.
+- **More resilient API access** – added request timeouts, bounded retry handling, and album asset-count enforcement.
+- **Automation** – added tests, CI validation, and automatic GitHub Releases for version tags.
 
 ### 1.6.0
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import secrets
 from typing import Any
 
 import voluptuous as vol
@@ -30,6 +31,7 @@ from .const import (
     CONF_API_KEY,
     CONF_ASSET_COUNT,
     CONF_HOST,
+    CONF_PLAYER_TOKEN_SALT,
     CONF_ROTATION_INTERVAL,
     CONF_SCAN_INTERVAL,
     DEFAULT_ASSET_COUNT,
@@ -482,6 +484,7 @@ class ImmichConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_API_ENDPOINT: self._endpoint,
                 CONF_ROTATION_INTERVAL: int(user_input[CONF_ROTATION_INTERVAL]),
                 CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL]),
+                CONF_PLAYER_TOKEN_SALT: secrets.token_urlsafe(32),
                 **self._collected,
             }
             title = API_ENDPOINTS.get(self._endpoint, "Immich")

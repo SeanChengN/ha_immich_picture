@@ -4,13 +4,21 @@ from __future__ import annotations
 
 import logging
 import pathlib
+import secrets
 import shutil
+
+import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from .const import DATA_CAMERAS, DOMAIN
+from .const import (
+    CONF_PLAYER_TOKEN_SALT,
+    DATA_CAMERAS,
+    DOMAIN,
+    SERVICE_ROTATE_PLAYER_TOKEN,
+)
 from .coordinator import ImmichDataUpdateCoordinator
 from .player import (
     ImmichPlayerPageView,
@@ -30,7 +38,30 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
     hass.http.register_view(ImmichPlayerPageView(hass))
     hass.http.register_view(ImmichPlayerStateView(hass))
     hass.http.register_view(ImmichVideoPlaybackView(hass))
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_ROTATE_PLAYER_TOKEN,
+        lambda call: _async_rotate_player_token(hass, call.data.get("entry_id")),
+        schema=vol.Schema({vol.Optional("entry_id"): str}),
+    )
     return True
+
+
+async def _async_rotate_player_token(
+    hass: HomeAssistant, entry_id: str | None
+) -> None:
+    """Rotate one or all player capability URLs."""
+    entries = hass.config_entries.async_entries(DOMAIN)
+    if entry_id is not None:
+        entries = [entry for entry in entries if entry.entry_id == entry_id]
+        if not entries:
+            raise ValueError(f"No {DOMAIN} config entry exists with id {entry_id}")
+
+    for entry in entries:
+        hass.config_entries.async_update_entry(
+            entry,
+            data={**entry.data, CONF_PLAYER_TOKEN_SALT: secrets.token_urlsafe(32)},
+        )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

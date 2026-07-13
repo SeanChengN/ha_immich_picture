@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import timedelta
 from typing import Any
 
-from aiohttp import ClientResponseError
+from aiohttp import ClientConnectionError, ClientResponseError, ClientTimeout
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.exceptions import ConfigEntryAuthFailed
@@ -32,6 +33,10 @@ from .const import (
     ENDPOINT_SEARCH,
     ASSET_TYPE_IMAGE,
     ASSET_TYPE_VIDEO,
+    API_CONNECT_TIMEOUT,
+    API_MAX_ATTEMPTS,
+    API_READ_TIMEOUT,
+    API_TOTAL_TIMEOUT,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -67,6 +72,12 @@ class ImmichDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
             update_interval=timedelta(seconds=scan_interval),
         )
 
+        self._request_timeout = ClientTimeout(
+            total=API_TOTAL_TIMEOUT,
+            connect=API_CONNECT_TIMEOUT,
+            sock_read=API_READ_TIMEOUT,
+        )
+
     @property
     def _headers(self) -> dict[str, str]:
         return {
@@ -78,14 +89,29 @@ class ImmichDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
         """Fetch the current asset list from Immich."""
         session = async_get_clientsession(self.hass)
 
-        try:
-            assets = await self._fetch_assets(session)
-        except ClientResponseError as err:
-            if err.status == 401:
-                raise ConfigEntryAuthFailed("Immich API key is no longer valid") from err
-            raise UpdateFailed(f"Error communicating with Immich API: {err}") from err
-        except Exception as err:
-            raise UpdateFailed(f"Error communicating with Immich API: {err}") from err
+        for attempt in range(API_MAX_ATTEMPTS):
+            try:
+                assets = await self._fetch_assets(session)
+                break
+            except ClientResponseError as err:
+                if err.status == 401:
+                    raise ConfigEntryAuthFailed(
+                        "Immich API key is no longer valid"
+                    ) from err
+                if not self._should_retry_status(err.status) or attempt == API_MAX_ATTEMPTS - 1:
+                    raise UpdateFailed(
+                        f"Error communicating with Immich API: {err}"
+                    ) from err
+                retry_after = err.headers.get("Retry-After") if err.headers else None
+                await self._async_retry_delay(attempt, retry_after)
+            except (ClientConnectionError, asyncio.TimeoutError) as err:
+                if attempt == API_MAX_ATTEMPTS - 1:
+                    raise UpdateFailed(
+                        f"Error communicating with Immich API: {err}"
+                    ) from err
+                await self._async_retry_delay(attempt)
+            except Exception as err:
+                raise UpdateFailed(f"Error communicating with Immich API: {err}") from err
 
         # The camera displays a JPEG thumbnail for each supported media asset.
         # Videos use Immich's generated thumbnail and are not played directly.
@@ -136,6 +162,21 @@ class ImmichDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
 
         return combined
 
+    @staticmethod
+    def _should_retry_status(status: int) -> bool:
+        """Return whether an HTTP response is safe to retry."""
+        return status == 429 or 500 <= status < 600
+
+    async def _async_retry_delay(
+        self, attempt: int, retry_after: str | None = None
+    ) -> None:
+        """Apply a small bounded backoff before retrying a read-only query."""
+        try:
+            delay = min(float(retry_after), 10) if retry_after else 0.5 * (2**attempt)
+        except ValueError:
+            delay = 0.5 * (2**attempt)
+        await asyncio.sleep(delay)
+
     async def _fetch_assets(self, session) -> list[dict[str, Any]]:
         """Route to the correct API call based on the configured endpoint."""
 
@@ -160,7 +201,9 @@ class ImmichDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
         url = f"{self.host}/api/search/random"
         body: dict[str, Any] = {"count": self.asset_count}
         body.update({k: v for k, v in self.api_params.items() if v not in (None, "")})
-        async with session.post(url, headers=self._headers, json=body) as resp:
+        async with session.post(
+            url, headers=self._headers, json=body, timeout=self._request_timeout
+        ) as resp:
             resp.raise_for_status()
             data = await resp.json()
         return data if isinstance(data, list) else []
@@ -170,7 +213,9 @@ class ImmichDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
         body: dict[str, Any] = {"size": self.asset_count}
         # Merge any extra user-supplied params (type, isFavorite, etc.)
         body.update({k: v for k, v in self.api_params.items() if v not in (None, "")})
-        async with session.post(url, headers=self._headers, json=body) as resp:
+        async with session.post(
+            url, headers=self._headers, json=body, timeout=self._request_timeout
+        ) as resp:
             resp.raise_for_status()
             data = await resp.json()
         return (
@@ -182,10 +227,11 @@ class ImmichDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
             _LOGGER.error("Album endpoint selected but no album_id configured")
             return []
         url = f"{self.host}/api/albums/{self.album_id}"
-        async with session.get(url, headers=self._headers) as resp:
+        async with session.get(url, headers=self._headers, timeout=self._request_timeout) as resp:
             resp.raise_for_status()
             data = await resp.json()
-        return data.get("assets", []) if isinstance(data, dict) else []
+        assets = data.get("assets", []) if isinstance(data, dict) else []
+        return assets[: self.asset_count]
 
     async def _fetch_favorites(self, session) -> list[dict[str, Any]]:
         url = f"{self.host}/api/search/metadata"
@@ -193,7 +239,9 @@ class ImmichDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
             "size": self.asset_count,
             "isFavorite": True,
         }
-        async with session.post(url, headers=self._headers, json=body) as resp:
+        async with session.post(
+            url, headers=self._headers, json=body, timeout=self._request_timeout
+        ) as resp:
             resp.raise_for_status()
             data = await resp.json()
         return (
@@ -204,7 +252,9 @@ class ImmichDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
         url = f"{self.host}/api/search/metadata"
         body: dict[str, Any] = {"size": self.asset_count}
         body.update({k: v for k, v in self.api_params.items() if v not in (None, "")})
-        async with session.post(url, headers=self._headers, json=body) as resp:
+        async with session.post(
+            url, headers=self._headers, json=body, timeout=self._request_timeout
+        ) as resp:
             resp.raise_for_status()
             data = await resp.json()
         return (

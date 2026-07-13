@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import hmac
 import io
 import logging
 import pathlib
 import time
+import uuid
 from datetime import timedelta
 from typing import Any
 
@@ -29,13 +29,17 @@ from .const import (
     ASSET_TYPE_IMAGE,
     ASSET_TYPE_VIDEO,
     CONF_API_ENDPOINT,
+    CONF_PLAYER_TOKEN_SALT,
     CONF_ROTATION_INTERVAL,
     DATA_CAMERAS,
     DEFAULT_ROTATION_INTERVAL,
     DOMAIN,
     MAX_VIDEO_CACHE_BYTES,
+    MAX_VIDEO_CACHE_TOTAL_BYTES,
 )
+from .cache import video_files_to_evict
 from .coordinator import ImmichDataUpdateCoordinator
+from .tokens import create_player_token
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -90,7 +94,11 @@ class ImmichCamera(Camera):
         self._cache_dir: pathlib.Path | None = None
         self._media_revision = 0
         self._load_task: asyncio.Task[None] | None = None
-        self._video_cache_tasks: dict[str, asyncio.Task[None]] = {}
+        self._video_cache_task: asyncio.Task[None] | None = None
+        self._active_video_cache_id: str | None = None
+        self._queued_video_cache_ids: list[str] = []
+        self._prune_task: asyncio.Task[None] | None = None
+        self._pending_prune_assets: list[dict[str, Any]] | None = None
         self._is_removed = False
         self._legacy_jpegs_cleaned = False
 
@@ -124,6 +132,9 @@ class ImmichCamera(Camera):
             lambda: cache_dir.mkdir(parents=True, exist_ok=True)
         )
         self._cache_dir = cache_dir
+        await self.hass.async_add_executor_job(
+            self._prune_video_cache_budget, self._protected_video_ids()
+        )
 
         self.hass.data[DOMAIN].setdefault(DATA_CAMERAS, {})[
             self._config_entry.entry_id
@@ -160,12 +171,16 @@ class ImmichCamera(Camera):
             self._rotation_unsubscribe()
             self._rotation_unsubscribe = None
 
-        tasks = [task for task in [self._load_task, *self._video_cache_tasks.values()] if task]
+        tasks = [
+            task
+            for task in [self._load_task, self._video_cache_task, self._prune_task]
+            if task is not None
+        ]
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        self._video_cache_tasks.clear()
+        self._queued_video_cache_ids.clear()
 
         if self._cache_dir is not None:
             await self.hass.async_add_executor_job(self._remove_partial_cache_files)
@@ -241,11 +256,11 @@ class ImmichCamera(Camera):
     @property
     def player_token(self) -> str:
         """Return a stable opaque token for the embedded player URL."""
-        return hmac.new(
-            self._coordinator.api_key.encode(),
-            self._config_entry.entry_id.encode(),
-            hashlib.sha256,
-        ).hexdigest()
+        return create_player_token(
+            self._coordinator.api_key,
+            self._config_entry.entry_id,
+            self._config_entry.data.get(CONF_PLAYER_TOKEN_SALT, ""),
+        )
 
     def is_valid_player_token(self, token: str | None) -> bool:
         """Validate an embedded player token without exposing the API key."""
@@ -266,9 +281,12 @@ class ImmichCamera(Camera):
         # any older fetch so a slow response cannot replace the new media.
         self._schedule_current_media_load()
 
-        # Prune cache entries which are no longer in the current media pool.
+        self._cancel_unavailable_video_cache(assets)
+
+        # Coalesce cache pruning so a stale asset pool cannot delete files
+        # retained by a newer coordinator refresh.
         if self._cache_dir is not None:
-            self.hass.async_create_task(self._prune_cache(assets))
+            self._schedule_cache_prune(assets)
 
         self.async_write_ha_state()
 
@@ -320,8 +338,24 @@ class ImmichCamera(Camera):
             return self._cache_dir / f"{cache_id}.jpg"
         return None
 
+    def _schedule_cache_prune(self, assets: list[dict[str, Any]]) -> None:
+        """Coalesce cache cleanup requests to the newest asset pool."""
+        self._pending_prune_assets = assets
+        if self._prune_task is None or self._prune_task.done():
+            self._prune_task = self.hass.async_create_task(self._async_prune_cache())
+
+    async def _async_prune_cache(self) -> None:
+        """Serialize cache cleanup, keeping only the latest coordinator data."""
+        while not self._is_removed and self._pending_prune_assets is not None:
+            assets = self._pending_prune_assets
+            self._pending_prune_assets = None
+            await self._prune_cache(assets)
+            await self.hass.async_add_executor_job(
+                self._prune_video_cache_budget, self._protected_video_ids()
+            )
+
     async def _prune_cache(self, assets: list[dict[str, Any]]) -> None:
-        """Prune media files outside the current asset pool."""
+        """Prune completed media files outside the current asset pool."""
         image_ids = {
             cache_id
             for asset in assets
@@ -343,25 +377,9 @@ class ImmichCamera(Camera):
                 except OSError:
                     pass
 
-            for f in self._cache_dir.glob("*.jpg.part"):
-                try:
-                    cache_id = f.name.removesuffix(".jpg.part")
-                    if cache_id not in image_ids:
-                        f.unlink()
-                except OSError:
-                    pass
-
             for f in self._cache_dir.glob("*.mp4"):
                 try:
                     if f.stem not in video_ids:
-                        f.unlink()
-                except OSError:
-                    pass
-
-            for f in self._cache_dir.glob("*.mp4.part"):
-                try:
-                    asset_id = f.name.removesuffix(".mp4.part")
-                    if asset_id not in video_ids:
                         f.unlink()
                 except OSError:
                     pass
@@ -372,7 +390,7 @@ class ImmichCamera(Camera):
         """Remove interrupted cache writes after all worker tasks stop."""
         if self._cache_dir is None:
             return
-        for pattern in ("*.jpg.part", "*.mp4.part"):
+        for pattern in ("*.jpg.part", "*.jpg.*.part", "*.mp4.part"):
             for cache_file in self._cache_dir.glob(pattern):
                 with contextlib.suppress(OSError):
                     cache_file.unlink()
@@ -380,7 +398,7 @@ class ImmichCamera(Camera):
     @staticmethod
     def _atomic_write(path: pathlib.Path, data: bytes) -> None:
         """Write bytes atomically so readers never observe a partial file."""
-        temp_file = path.with_suffix(path.suffix + ".part")
+        temp_file = path.with_name(f"{path.name}.{uuid.uuid4().hex}.part")
         temp_file.write_bytes(data)
         temp_file.replace(path)
 
@@ -428,15 +446,84 @@ class ImmichCamera(Camera):
         cache_file = self._cache_dir / f"{asset_id}.mp4"
         return cache_file if cache_file.is_file() else None
 
+    async def async_cached_video_path(self, asset_id: str) -> pathlib.Path | None:
+        """Return and mark a cached video as recently used."""
+        cache_file = self.cached_video_path(asset_id)
+        if cache_file is not None:
+            with contextlib.suppress(OSError):
+                await self.hass.async_add_executor_job(cache_file.touch)
+        return cache_file
+
     def _schedule_video_cache(self, asset_id: str) -> None:
-        """Start caching the current short video without blocking rotation."""
-        if asset_id in self._video_cache_tasks:
-            return
+        """Queue a short video cache download without unbounded concurrency."""
         if self.cached_video_path(asset_id) is not None:
             return
-        self._video_cache_tasks[asset_id] = self.hass.async_create_task(
-            self._async_cache_video(asset_id)
-        )
+        if asset_id == self._active_video_cache_id or asset_id in self._queued_video_cache_ids:
+            return
+        self._queued_video_cache_ids.insert(0, asset_id)
+        self._start_next_video_cache()
+
+    def _start_next_video_cache(self) -> None:
+        """Start at most one queued download for this config entry."""
+        if self._is_removed or (
+            self._video_cache_task is not None and not self._video_cache_task.done()
+        ):
+            return
+
+        while self._queued_video_cache_ids:
+            asset_id = self._queued_video_cache_ids.pop(0)
+            if not self.has_video_asset(asset_id) or self.cached_video_path(asset_id):
+                continue
+            self._active_video_cache_id = asset_id
+            self._video_cache_task = self.hass.async_create_task(
+                self._async_cache_video(asset_id)
+            )
+            return
+        self._active_video_cache_id = None
+
+    def _cancel_unavailable_video_cache(self, assets: list[dict[str, Any]]) -> None:
+        """Cancel queued or active downloads no longer present in the pool."""
+        video_ids = {
+            str(asset["id"])
+            for asset in assets
+            if asset.get("type") == ASSET_TYPE_VIDEO and asset.get("id")
+        }
+        self._queued_video_cache_ids = [
+            asset_id for asset_id in self._queued_video_cache_ids if asset_id in video_ids
+        ]
+        if (
+            self._active_video_cache_id not in video_ids
+            and self._video_cache_task is not None
+            and not self._video_cache_task.done()
+        ):
+            self._video_cache_task.cancel()
+
+    def _prune_video_cache_budget(self, protected_ids: set[str]) -> None:
+        """Evict least-recently-used videos until the per-entry budget fits."""
+        if self._cache_dir is None:
+            return
+        protected_names = {f"{asset_id}.mp4" for asset_id in protected_ids}
+        for cache_file in video_files_to_evict(
+            self._cache_dir.glob("*.mp4"),
+            MAX_VIDEO_CACHE_TOTAL_BYTES,
+            protected_names,
+        ):
+            with contextlib.suppress(OSError):
+                cache_file.unlink()
+
+    def _protected_video_ids(self) -> set[str]:
+        """Return video IDs that must not be evicted during this operation."""
+        protected_ids = {
+            asset_id
+            for asset_id in [self._active_video_cache_id]
+            if asset_id is not None
+        }
+        current_asset = self.current_asset
+        if current_asset and current_asset.get("type") == ASSET_TYPE_VIDEO:
+            asset_id = current_asset.get("id")
+            if asset_id:
+                protected_ids.add(str(asset_id))
+        return protected_ids
 
     async def _async_cache_video(self, asset_id: str) -> None:
         """Cache a video only when Immich reports it is below the size limit."""
@@ -493,6 +580,10 @@ class ImmichCamera(Camera):
             file_handle = None
             await self.hass.async_add_executor_job(temp_file.replace, cache_file)
             completed = True
+            protected_ids = self._protected_video_ids() | {asset_id}
+            await self.hass.async_add_executor_job(
+                self._prune_video_cache_budget, protected_ids
+            )
             _LOGGER.debug("Cached Immich video %s", asset_id)
         except asyncio.CancelledError:
             raise
@@ -505,8 +596,10 @@ class ImmichCamera(Camera):
             if not completed:
                 with contextlib.suppress(FileNotFoundError, OSError):
                     await self.hass.async_add_executor_job(temp_file.unlink)
-            if self._video_cache_tasks.get(asset_id) is asyncio.current_task():
-                self._video_cache_tasks.pop(asset_id, None)
+            if self._active_video_cache_id == asset_id:
+                self._active_video_cache_id = None
+            self._video_cache_task = None
+            self._start_next_video_cache()
 
     @staticmethod
     def _compose_side_by_side(left_bytes: bytes, right_bytes: bytes) -> bytes:

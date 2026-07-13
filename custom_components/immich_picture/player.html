@@ -26,6 +26,9 @@
       let currentRevision = null;
       let snapshotUrl = null;
       let refreshTimer = null;
+      let stateRequest = null;
+      let refreshSequence = 0;
+      let currentVideoUrl = null;
 
       function scheduleRefresh(nextRotationAt) {
         const fallbackDelay = 15000;
@@ -43,6 +46,7 @@
       }
 
       function showImage(url) {
+        currentVideoUrl = null;
         video.pause();
         video.removeAttribute("src");
         video.load();
@@ -53,18 +57,24 @@
       }
 
       function showVideo(url, posterUrl) {
+        currentVideoUrl = new URL(url, window.location.href).href;
         image.hidden = true;
         video.poster = posterUrl;
         video.muted = true;
         video.src = url;
         video.hidden = false;
         video.load();
-        video.play().then(() => { message.hidden = true; }).catch(() => {
-          showMessage("Tap the video controls to start playback.");
+        video.play().then(() => {
+          if (video.currentSrc === currentVideoUrl) message.hidden = true;
+        }).catch(() => {
+          if (video.currentSrc === currentVideoUrl) {
+            showMessage("Tap the video controls to start playback.");
+          }
         });
       }
 
       video.addEventListener("error", () => {
+        if (video.hidden || video.currentSrc !== currentVideoUrl) return;
         if (snapshotUrl) {
           image.src = snapshotUrl;
           image.hidden = false;
@@ -72,15 +82,25 @@
         showMessage("This video could not be played. The preview is shown instead.");
       });
 
+      image.addEventListener("error", () => {
+        showMessage("This image could not be loaded. Waiting for the next update.");
+      });
+
       async function refresh() {
+        if (stateRequest) stateRequest.abort();
+        const controller = new AbortController();
+        const sequence = ++refreshSequence;
+        stateRequest = controller;
         let nextRotationAt = null;
         try {
           const response = await fetch(stateUrl, {
             cache: "no-store",
             credentials: "same-origin",
+            signal: controller.signal,
           });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const state = await response.json();
+          if (sequence !== refreshSequence) return;
           nextRotationAt = state.next_rotation_at;
           if (!state.revision) {
             showMessage("No media is available yet.");
@@ -96,15 +116,21 @@
             showImage(snapshotUrl);
           }
         } catch (err) {
-          showMessage("Waiting for Home Assistant media state.");
+          if (err.name !== "AbortError" && sequence === refreshSequence) {
+            showMessage("Waiting for Home Assistant media state.");
+          }
         } finally {
-          scheduleRefresh(nextRotationAt);
+          if (stateRequest === controller) {
+            stateRequest = null;
+            scheduleRefresh(nextRotationAt);
+          }
         }
       }
 
       document.addEventListener("visibilitychange", () => {
         if (!document.hidden) {
           if (refreshTimer) window.clearTimeout(refreshTimer);
+          if (stateRequest) stateRequest.abort();
           refresh();
         }
       });

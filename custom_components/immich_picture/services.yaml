@@ -1,0 +1,12 @@
+rotate_player_token:
+  name: Rotate player URL token
+  description: >-
+    Invalidates existing embedded player URLs. Supply an entry ID to rotate one
+    slideshow, or leave it empty to rotate every Immich Picture slideshow.
+  fields:
+    entry_id:
+      name: Configuration entry ID
+      description: Optional Immich Picture configuration entry ID.
+      required: false
+      selector:
+        text:
