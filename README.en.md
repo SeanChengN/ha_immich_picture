@@ -176,6 +176,10 @@ If a player URL is exposed, call `immich_picture.rotate_player_token` from **Dev
 
 ## Changelog
 
+### 1.7.2
+
+- Corrected `manifest.json` key ordering so Hassfest validation passes.
+
 ### 1.7.1
 
 - **Hassfest compatibility**: declared the HTTP dependency, added the config-entry-only schema, and corrected translation structure.

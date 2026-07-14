@@ -176,6 +176,10 @@ disable_sandbox: true
 
 ## 更新日志
 
+### 1.7.2
+
+- 修正 `manifest.json` 键排序，确保 Hassfest 验证通过。
+
 ### 1.7.1
 
 - **Hassfest 修复**：补齐 HTTP 依赖、仅 Config Entry 架构及符合规范的翻译结构。
