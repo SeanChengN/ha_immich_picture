@@ -80,20 +80,20 @@
           "rotation_interval": "Media rotation interval (seconds)",
           "scan_interval": "API refresh interval (seconds)"
         }
-      }
-    },
-    "reauth_confirm": {
-      "title": "Reconnect to Immich",
-      "description": "Enter a new API key for this Immich account. All sources using the same saved credentials will be updated.",
-      "data": {
-        "api_key": "API Key"
+      },
+      "reauth_confirm": {
+        "title": "Reconnect to Immich",
+        "description": "Enter a new API key for this Immich account. All sources using the same saved credentials will be updated.",
+        "data": {
+          "api_key": "API Key"
+        }
       }
     },
     "error": {
       "cannot_connect": "Unable to connect to Immich. Check the URL and ensure Immich is reachable.",
       "invalid_auth": "Invalid API key. Please check your Immich API key.",
       "cannot_fetch_albums": "Could not load albums from Immich. The entry was left empty; you may type an album ID manually.",
-      "invalid_json": "Must be a valid JSON object, e.g. {\"city\": \"Paris\"}"
+      "invalid_json": "Must be a valid JSON object, for example with a city field set to Paris."
     },
     "abort": {
       "already_configured": "This Immich Picture instance is already configured.",

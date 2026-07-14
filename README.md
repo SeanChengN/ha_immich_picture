@@ -1,75 +1,62 @@
-# Immich Picture – Home Assistant Integration
+# Immich Picture – Home Assistant 集成
 
-A Home Assistant custom integration that turns your [Immich](https://immich.app) photo server into a rotating media slideshow, exposed as a `camera` entity. Drop it onto any dashboard with a **Picture card** or **Picture Glance card** and your photos and video previews cycle automatically.
+简体中文 | [English](README.en.md)
 
----
-
-## Features
-
-- **Five media sources** – random, all recent, by album, favourites only, or metadata search
-- **Filterable random & search** – POST a JSON body to the Immich API to narrow results by person, city, date range, type, and more
-- **Configurable rotation** – set how often the displayed media changes (5 s – 1 h)
-- **Configurable refresh** – set how often a fresh batch of assets is fetched from Immich (1 min – 24 h)
-- **Resilient media cache** – every downloaded thumbnail is written to disk, and videos under 50 MiB are cached locally for playback
-- **Multiple instances** – add the integration more than once to run several slideshows (e.g. one per album or one per room) simultaneously
-- **Portrait photo support** – portrait images are automatically paired side-by-side to produce a landscape composite, so no photos are wasted
-- **Video playback** – videos are included as JPEG previews in the camera entity and can play in a built-in, looping HTML5 player
-- **Live reconfiguration** – all timing, count, and JSON filter settings are editable via the ⚙ configure button without removing and re-adding the integration
+将 [Immich](https://immich.app) 相册变成 Home Assistant 中自动轮播的媒体 `camera` 实体。可用于图片卡、图片概览卡和内置网页播放器，照片与视频会按设定间隔切换。
 
 ---
 
-## Requirements
+## 功能
 
-- Home Assistant 2023.x or later
-- An Immich instance reachable from your HA host (local network or VPN)
-- An Immich API key (generate one under **Account Settings → API Keys**)
-
-### Immich Permissions
-
-The following permissions are needed for all five media sources to work:
-
-- `asset.read` - required for the random, recent, favourite and metadata search
-- `album.read` - required for the album request
-- `asset.view` - required to view the images in the Home Assistant entity
+- 五种来源：随机、全部（近期）、相册、收藏、元数据搜索
+- 随机和搜索支持 Immich JSON 筛选，可按人物、城市、日期、媒体类型等过滤
+- 轮播间隔可设为 5 秒至 1 小时；媒体池刷新间隔可设为 1 分钟至 24 小时
+- 缩略图缓存具备离线回退；小于 50 MiB 的视频可缓存为本地 MP4 播放
+- 同一 Immich 账户可创建多个独立来源，完全相同的来源也允许重复添加
+- 竖图和方图会两两横向合成；视频在 camera 中显示 JPEG 预览，在网页播放器中循环播放
+- 可在“配置”中修改数量、时间和 JSON 筛选，无需删除条目
 
 ---
 
-## Installation
+## 要求与权限
 
-### HACS (recommended)
+- Home Assistant 2023.x 或更高版本
+- Home Assistant 主机可访问的 Immich 实例（局域网或 VPN）
+- Immich API Key：在 **账户设置 → API Keys** 创建
 
-1. Open HACS → **Integrations** → ⋮ → **Custom repositories**
-2. Add this repository URL and select category **Integration**
-3. Search for **Immich Picture** and install
-4. Restart Home Assistant
-
-### Manual
-
-1. Copy the `custom_components/immich_picture/` folder into your HA config directory under `custom_components/`
-2. Restart Home Assistant
+为使用全部五种来源，API Key 应拥有：`asset.read`（随机、近期、收藏和搜索）、`album.read`（相册）与 `asset.view`（查看媒体）权限。
 
 ---
 
-## Setup
+## 安装
 
-1. Go to **Settings → Devices & Services → Add Integration** and search for **Immich Picture**
-2. Select a saved Immich account, or enter your Immich URL (e.g. `http://192.168.1.100:2283`) and API key
-3. Choose a **photo source** (see below)
-4. Configure source-specific options (asset count, JSON filter, etc.)
-5. Set rotation and refresh intervals
-6. The integration creates a `camera` entity ready to use on any dashboard
+### HACS（推荐）
 
-Repeat **Add Integration** to add more sources for the same account. Choose the saved account to reuse its credentials, then configure the new source independently. Identical sources are allowed when you need separate slideshows, rotation intervals, or dashboards.
+1. 打开 HACS → **集成** → ⋮ → **自定义仓库**。
+2. 添加本仓库地址，类别选择 **Integration**。
+3. 搜索并安装 **Immich Picture**，然后重启 Home Assistant。
+
+### 手动安装
+
+1. 将 `custom_components/immich_picture/` 复制到 Home Assistant 配置目录的 `custom_components/` 下。
+2. 重启 Home Assistant。
 
 ---
 
-## Media Sources
+## 配置与多来源
 
-### Random Assets
+1. 进入 **设置 → 设备与服务 → 添加集成**，搜索 **Immich Picture**。
+2. 选择已保存的 Immich 账户，或输入 Immich URL（例如 `http://192.168.1.100:2283`）和 API Key。
+3. 选择来源，设置来源专属参数、轮播间隔与刷新间隔。
+4. 集成会创建可直接放入仪表盘的 `camera` 实体。
 
-Fetches a random selection of images and video previews each refresh cycle using `POST /api/search/random`.
+再次执行“添加集成”即可为相同账户增加更多来源。选择已保存账户会复用凭据，但每个来源的实体、缓存、轮播时间和播放器 URL 都是独立的。
 
-Supports an optional JSON filter body to narrow the random pool:
+## 媒体来源
+
+### 随机媒体
+
+每次刷新通过 `POST /api/search/random` 获取随机图片和视频预览，可选 JSON 筛选：
 
 ```json
 {
@@ -79,31 +66,23 @@ Supports an optional JSON filter body to narrow the random pool:
 }
 ```
 
-[API reference](https://api.immich.app/endpoints/search/searchRandom)
+[Immich API 参考](https://api.immich.app/endpoints/search/searchRandom)
 
----
+### 全部媒体（近期）
 
-### All Assets (Recent)
+按从新到旧或从旧到新的顺序获取媒体库中的资产。
 
-Fetches the most recent assets from your library, ordered newest-first or oldest-first.
+### 相册媒体
 
----
+从选定相册获取图片和视频预览；配置时会从 Immich 加载相册供选择。
 
-### Album Assets
+### 收藏媒体
 
-Fetches all images and video previews from a specific album. Albums are loaded from Immich during setup so you can pick from a dropdown.
+仅获取在 Immich 中标记为收藏的图片和视频预览。
 
----
+### 按元数据搜索
 
-### Favourite Assets
-
-Fetches only images and video previews you have marked as a favourite in Immich.
-
----
-
-### Search by Metadata
-
-Fetches images and video previews matching a JSON metadata query using `POST /api/search/metadata`. This is the most powerful source – you can filter by city, country, date range, camera make/model, whether the media is archived, a favourite, a specific person, and more.
+通过 `POST /api/search/metadata` 使用 JSON 查询。可按城市、国家、日期、相机、归档状态、收藏、人物及媒体类型过滤：
 
 ```json
 {
@@ -114,135 +93,129 @@ Fetches images and video previews matching a JSON metadata query using `POST /ap
 }
 ```
 
-[API reference](https://api.immich.app/endpoints/search/searchAssets)
+[Immich API 参考](https://api.immich.app/endpoints/search/searchAssets)
 
----
+## 可配置选项
 
-## Options (⚙ Configure)
-
-After initial setup you can adjust the following via the **configure** button without restarting:
-
-| Setting | Description | Range |
+| 设置 | 说明 | 范围 |
 |---|---|---|
-| Photo rotation interval | How often the displayed image advances | 5 s – 3600 s |
-| API refresh interval | How often a fresh batch is fetched from Immich | 60 s – 86400 s |
-| Number of assets | Size of the asset pool loaded per refresh | 1 – 500 |
-| Filter (JSON) | JSON body for the API request *(random & search only)* | any valid JSON object |
+| 媒体轮播间隔 | 当前画面切换的频率 | 5–3600 秒 |
+| API 刷新间隔 | 从 Immich 获取新媒体池的频率 | 60–86400 秒 |
+| 媒体数量 | 每次刷新载入的资产数量 | 1–500 |
+| 筛选（JSON） | 随机和搜索来源的 API 请求体 | 任意有效 JSON 对象 |
 
-Changes take effect immediately — the integration reloads automatically when you save.
+保存配置后集成会自动重载，改动立即生效。
 
 ---
 
-## Image Cache
+## 缓存与离线回退
 
-Every image and video thumbnail that is successfully downloaded is written to a JPEG file named for its Immich asset ID. Portrait pairs use their combined slide ID. Videos smaller than 50 MiB are also cached by Immich asset ID for local playback:
+成功下载的图片与视频预览会按 Immich 资产 ID 写入 JPEG；竖图组合使用组合轮播 ID。严格小于 50 MiB 的视频还会缓存为 MP4：
 
 ```
 <ha-config-dir>/immich_picture/image_cache/<entry-id>/<asset-id>.jpg
 <ha-config-dir>/immich_picture/image_cache/<entry-id>/<asset-id>.mp4
 ```
 
-JPEG and MP4 files are retained only while their assets are in the current pool; the next Immich refresh removes stale media files and interrupted downloads. MP4 cache files are capped at **500 MiB per configuration entry**; least-recently-used videos are removed when the budget is exceeded. Existing numbered JPEG cache files from versions before 1.6.0 remain available during upgrade as a startup fallback, then are removed after the first successful new-format JPEG cache write.
+JPEG、MP4 和中断下载的临时文件只保留当前媒体池仍包含的资产，下一次刷新会清除过期文件。每个配置项的 MP4 缓存最多 **500 MiB**，超过时按最近最少使用原则清理，同时保护当前播放和下载中的文件。升级前的旧序号 JPEG 会作为启动回退保留，首次成功写入新格式缓存后自动清理。
 
-**When Immich is available** the slot file is overwritten with the freshest image or video preview for that position. The built-in player prefers a cached MP4, falling back to Immich when a video is at least 50 MiB or has no known size.
-
-**When Immich is unreachable** (planned downtime, network outage, server restart) the integration serves the cached file for the selected asset instead of showing a blank or incorrect image. If that asset has never been fetched before and has no cache file yet, the previously displayed image is preserved unchanged.
-
-Deleting a configuration entry removes its entire cache directory, including JPEG previews, cached MP4 files, and unfinished downloads. You can also delete a cache directory manually; it is recreated automatically on the next successful fetch.
+Immich 可用时会获取最新预览；播放器优先读取本地 MP4，不满足大小条件或大小未知时则代理 Immich 播放。Immich 离线时，只会回退到对应资产的缓存；若该资产没有缓存，会继续保留上一张已显示的画面。删除配置项会删除该条目的全部 JPEG、MP4 和临时缓存；手动删除缓存目录也安全，会在下次成功获取时重建。
 
 ---
 
-## Dashboard Usage
+## 仪表盘与实体属性
 
-Add a **Picture card** or **Picture Glance card** and point it at the `camera.immich_picture_slideshow_*` entity. The image updates automatically at the configured rotation interval with no page reload required.
+将 `camera.immich_picture_slideshow_*` 放入 **图片** 或 **图片概览**卡即可自动更新。实体还提供以下属性供自动化或模板使用：
 
-The entity also exposes state attributes you can use in automations or template sensors:
-
-| Attribute | Description |
+| 属性 | 含义 |
 |---|---|
-| `asset_id` | Immich UUID of the current photo |
-| `asset_type` | Current asset type (`IMAGE` or `VIDEO`) |
-| `filename` | Original file name |
-| `taken_at` | Date/time the photo was taken |
-| `total_assets` | Number of assets in the current pool |
-| `current_index` | 1-based position in the pool |
-| `endpoint` | Configured photo source identifier |
-| `player_url` | Authenticated built-in media player page for this entry |
+| `asset_id` | 当前 Immich 资产 UUID |
+| `asset_type` | 当前类型：`IMAGE` 或 `VIDEO` |
+| `filename` | 原始文件名 |
+| `taken_at` | 拍摄时间 |
+| `total_assets` | 当前媒体池总数 |
+| `current_index` | 当前媒体的一位序号 |
+| `endpoint` | 当前来源标识 |
+| `player_url` | 已鉴权的内置媒体播放器地址 |
 
-Each device also includes a **diagnostic sensor** (`sensor.immich_picture_image_cache_path`) that shows the full path to the on-disk image cache directory for that instance. This is useful for locating cached files when debugging or for manual cache management.
+每个设备还会创建诊断传感器 `sensor.immich_picture_image_cache_path`，用于显示该实例的缓存目录。
 
 ---
 
-## Video Playback
+## 视频网页播放器
 
-The camera entity always returns a JPEG snapshot, including for VIDEO assets. To play videos, add a **Webpage** card and use the `player_url` attribute from the camera entity as its URL. The built-in player stays in sync with the slideshow: images display as snapshots, and videos play muted in a loop until the configured media rotation interval selects the next asset.
+camera 实体始终返回 JPEG 快照，VIDEO 资产也一样。若需播放视频，请使用 **网页** 卡，并使用 camera 属性中的完整 `player_url` 作为 URL。播放器与轮播保持同步：图片显示快照，视频静音循环播放，直到正常轮播时间到达。
 
 ```yaml
 type: iframe
-url: /api/immich_picture/player/<entry-id>
+url: /api/immich_picture/player/<entry-id>?token=<player-token>
 aspect_ratio: "16:9"
 allow: autoplay; fullscreen
 disable_sandbox: true
 ```
 
-Use the complete `player_url` value, including its `token` query parameter, rather than manually constructing this URL. The token grants access only to this player's current media pool, and the player proxies video requests to Immich without exposing the API key. Treat `player_url` as a secret and do not expose it through an unauthenticated reverse proxy. Videos start muted to satisfy browser autoplay policies; use the player controls to enable sound after interacting with the page.
+应直接复制完整 `player_url`（包括 `token`），不要手工拼接。该 token 是仅限当前播放器媒体池的能力 URL；播放器会代理 Immich 视频请求，不会暴露 API Key。请把它视为机密，不要经未认证的反向代理公开。为满足浏览器自动播放规则，视频默认静音；与控件交互后可开启声音。
 
-If a player URL is exposed, rotate it from **Developer Tools → Actions** with `immich_picture.rotate_player_token`. Provide `entry_id` to rotate one slideshow, or omit it to rotate every Immich Picture player. This invalidates the old URL; copy the refreshed `player_url` attribute into the Webpage card afterward.
-
----
-
-## Troubleshooting
-
-**No image shown on startup** — ensure HA can reach your Immich URL. Check **Settings → System → Logs** and filter for `immich_picture`.
-
-**Images stop updating but the card still shows a photo** — Immich is likely unreachable; the cache is being served. The integration will resume live images automatically once Immich is back.
-
-**"Unable to connect" during setup** – verify the URL includes the port (e.g. `http://192.168.1.100:2283`) and that the API key is correct.
-
-**API key expired or revoked** – Home Assistant opens a reauthentication form after Immich returns `401`. Enter the replacement key once; every source using the same previous account credentials is updated and reloaded.
-
-**JSON filter rejected** — the field must be a valid JSON *object* (curly-brace wrapper, not an array). Use a tool like [jsonlint.com](https://jsonlint.com) to validate before pasting.
+如果 URL 泄露，可在 **开发者工具 → 操作** 调用 `immich_picture.rotate_player_token`。提供 `entry_id` 可只轮换一个轮播；留空则轮换全部播放器。旧 URL 会立即失效，随后将实体属性中新生成的 `player_url` 更新到网页卡。
 
 ---
 
-## Changelog
+## 故障排除
+
+**启动时没有图片**：确认 Home Assistant 可访问 Immich URL，并在 **设置 → 系统 → 日志** 中按 `immich_picture` 筛选。
+
+**画面不更新但仍显示照片**：Immich 可能暂时不可用，当前正在使用缓存；恢复连接后会自动继续获取最新媒体。
+
+**配置时无法连接**：确认 URL 包含端口（如 `http://192.168.1.100:2283`）且 API Key 正确。
+
+**API Key 已过期或撤销**：Immich 返回 `401` 时 Home Assistant 会显示重新认证表单。更新一次 API Key 后，使用旧凭据的全部来源都会一并更新并重载。
+
+**JSON 筛选被拒绝**：字段必须是 JSON 对象而不是数组，粘贴前可使用 [jsonlint.com](https://jsonlint.com) 验证。
+
+---
+
+## 更新日志
+
+### 1.7.1
+
+- **Hassfest 修复**：补齐 HTTP 依赖、仅 Config Entry 架构及符合规范的翻译结构。
+- **文档语言**：简体中文现在是默认 README；完整英文文档见 [README.en.md](README.en.md)。
 
 ### 1.7.0
 
-- **Bounded video cache** – one download runs per slideshow and cached MP4 files use a 500 MiB LRU budget.
-- **Safer player URLs** – added token rotation, restrictive response headers, and stale-request protection in the player page.
-- **More resilient API access** – added request timeouts, bounded retry handling, and album asset-count enforcement.
-- **Automation** – added tests, CI validation, and automatic GitHub Releases for version tags.
+- **视频缓存限制**：每个轮播只允许一个下载任务，MP4 使用 500 MiB 的 LRU 缓存预算。
+- **更安全的播放器 URL**：新增 token 轮换、严格响应头及页面过期请求保护。
+- **更可靠的 API 访问**：增加请求超时、有限重试和相册数量限制。
+- **工程自动化**：新增测试、CI 校验与 tag 自动 GitHub Release。
 
 ### 1.6.0
 
-- **Reliable media cache** – JPEG files now use asset IDs and atomic writes, preventing an outdated slideshow slot from being shown for another asset.
-- **Lower-memory video cache** – short MP4 files are streamed to disk in chunks and cache work is cancelled safely during reload or removal.
-- **Smoother player sync** – the built-in player uses the planned rotation time instead of polling Home Assistant every second.
-- **Saved-account improvements** – duplicate account choices are merged, and reauthentication updates all matching sources.
-- **Repository metadata** – documentation and repository links now point to this project.
+- **可靠媒体缓存**：JPEG 使用资产 ID 和原子写入，避免旧轮播槽位显示为其他资产。
+- **低内存视频缓存**：短视频分块写盘，并在重载或删除时安全取消。
+- **平滑播放器同步**：播放器按计划轮播时间刷新，不再每秒轮询。
+- **已保存账户优化**：合并重复账户选项，重新认证会更新全部匹配来源。
 
 ### 1.5.1
 
-- **Simplified Chinese translation** – added Chinese UI text for setup, options, errors, and the cache-path sensor.
+- 新增简体中文配置、选项、错误和缓存路径传感器翻译。
 
 ### 1.5.0
 
-- **Short video cache** – videos smaller than 50 MiB are cached locally for playback and removed when their source no longer includes them or its configuration entry is deleted.
-- **Multiple sources per account** – new sources can reuse a saved Immich account without entering its API key again.
+- 小于 50 MiB 的视频可本地缓存播放，并随来源资产池或配置项删除而清理。
+- 同账户可复用凭据创建多个独立来源。
 
 ### 1.4.0
 
-- **Built-in media player** – added an authenticated HTML5 player page for mixed image/video slideshows. Videos are muted and loop until the normal rotation interval advances to the next media item.
+- 新增图片/视频混合轮播的内置 HTML5 播放器；视频静音循环至正常轮播切换。
 
 ### 1.3.2
 
-- **Video thumbnail support** – VIDEO assets are now included alongside IMAGE assets and shown as Immich-generated JPEG previews in the slideshow.
+- VIDEO 资产与 IMAGE 一起进入轮播，并显示 Immich 生成的 JPEG 预览。
 
 ### 1.3.0
 
-- **Portrait image support** — portrait (and square) images are no longer filtered out. Instead, they are automatically paired and composited side-by-side into a single landscape image using PIL. If there is an odd number of portrait images, the unpaired one is excluded. Landscape images continue to be served as-is.
+- 竖图和方图会两两横向合成；横图保持原样，落单竖图不显示。
 
 ### 1.2.1
 
-- Initial tracked release
+- 首个跟踪版本。

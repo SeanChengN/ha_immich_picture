@@ -11,6 +11,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from .const import (
@@ -29,6 +30,7 @@ from .player import (
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["camera", "sensor"]
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 async def async_setup(hass: HomeAssistant, _config: dict) -> bool:

@@ -80,20 +80,20 @@
           "rotation_interval": "媒体轮播间隔（秒）",
           "scan_interval": "API 刷新间隔（秒）"
         }
-      }
-    },
-    "reauth_confirm": {
-      "title": "重新连接 Immich",
-      "description": "请输入此 Immich 账户的新 API 密钥。使用相同已保存凭据的所有来源都会一并更新。",
-      "data": {
-        "api_key": "API 密钥"
+      },
+      "reauth_confirm": {
+        "title": "重新连接 Immich",
+        "description": "请输入此 Immich 账户的新 API 密钥。使用相同已保存凭据的所有来源都会一并更新。",
+        "data": {
+          "api_key": "API 密钥"
+        }
       }
     },
     "error": {
       "cannot_connect": "无法连接到 Immich。请检查 URL 并确认 Immich 可以访问。",
       "invalid_auth": "API 密钥无效。请检查您的 Immich API 密钥。",
       "cannot_fetch_albums": "无法从 Immich 加载相册。该项将留空；您可以手动输入相册 ID。",
-      "invalid_json": "必须是有效的 JSON 对象，例如：{\"city\": \"Paris\"}"
+      "invalid_json": "必须是有效的 JSON 对象，例如包含城市字段且值为 Paris。"
     },
     "abort": {
       "already_configured": "此 Immich Picture 实例已配置。",
